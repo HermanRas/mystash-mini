@@ -741,7 +741,11 @@ select option {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Mini: the whole picture, shrunk to fit, never cropped — a portrait photo
+     or vertical video fits the tile's height with dark bars either side
+     instead of losing most of itself to a 16:9 crop. */
+  object-fit: contain;
+  background: #000;
 }
 
 .thumb-preview {
