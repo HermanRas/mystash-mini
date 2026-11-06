@@ -68,19 +68,19 @@ array_map("unlink", glob("/dev/shm/before/*")); rmdir("/dev/shm/before");
 echo "  original video sha256: ${BEFORE:0:16}…"
 
 # --- convert it through the endpoint a user would press -------------------
-curl -s -c "$JAR" -o /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8080/login.php
+curl -s -c "$JAR" -o /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8090/login.php
 
 # 4.28: the POST starts a job and returns. If it ever goes back to doing the
 # transcode inline, this is the assertion that notices — the whole failure was
 # a request that never came back.
-POST_MS=$(curl -s -b "$JAR" -o /dev/null -w '%{time_total}' -d "id=1" http://localhost:8080/video_convert.php \
+POST_MS=$(curl -s -b "$JAR" -o /dev/null -w '%{time_total}' -d "id=1" http://localhost:8090/video_convert.php \
   | awk '{printf "%d", $1 * 1000}')
 echo "  convert POST returned in ${POST_MS}ms"
 [ "$POST_MS" -lt 3000 ]; check "the convert POST returns immediately instead of blocking on ffmpeg" $?
 
 # ...and the rest of the site answers while it runs. This is the symptom that
 # started 4.28: one transcode and the whole app stopped responding.
-WALL_MS=$(curl -s -b "$JAR" -o /dev/null -w '%{time_total}' http://localhost:8080/wall.php \
+WALL_MS=$(curl -s -b "$JAR" -o /dev/null -w '%{time_total}' http://localhost:8090/wall.php \
   | awk '{printf "%d", $1 * 1000}')
 echo "  wall.php answered in ${WALL_MS}ms while the conversion was running"
 [ "$WALL_MS" -lt 5000 ]; check "the site still answers while a conversion is running" $?
@@ -89,7 +89,7 @@ echo "  wall.php answered in ${WALL_MS}ms while the conversion was running"
 # ffmpeg over the same archive. The job id is derived from the user and the
 # video, so the second press finds the first job instead of launching another.
 # (The pattern is bracketed so pgrep does not count the shell running it.)
-curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8080/video_convert.php
+curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8090/video_convert.php
 WORKERS=$(docker compose exec -T -u www-data app sh -c 'pgrep -fc "[j]ob_worker" || true' | tr -d "\r")
 echo "  job_worker processes after a second press: ${WORKERS:-0}"
 [ "${WORKERS:-0}" -le 1 ]; check "a second Convert press does not start a second worker" $?
@@ -97,7 +97,7 @@ echo "  job_worker processes after a second press: ${WORKERS:-0}"
 # --- watch the job the way the browser does -------------------------------
 STATE=""; SEEN_RUNNING=0; PEAK=0
 for _ in $(seq 1 180); do
-  JSON=$(curl -s -b "$JAR" "http://localhost:8080/job_status.php?kind=convert&target=1")
+  JSON=$(curl -s -b "$JAR" "http://localhost:8090/job_status.php?kind=convert&target=1")
   STATE=$(printf '%s' "$JSON" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')
   PERCENT=$(printf '%s' "$JSON" | sed -n 's/.*"percent":\([0-9]*\).*/\1/p')
   [ "$STATE" = "running" ] && SEEN_RUNNING=1

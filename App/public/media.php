@@ -42,6 +42,9 @@ $suffixes = [
     'preview' => ['.mp4.preview.enc', 'video/mp4'],
     'video' => ['.mp4.enc', 'video/mp4'],
     'trim' => ['_trim.mp4.enc', 'video/mp4'],
+    // A picture's original. The real Content-Type is decided below from the
+    // extension the archive holds, which PictureIngest chose from the bytes.
+    'picture' => ['.img.enc', 'application/octet-stream'],
 ];
 
 if ($type === 'avatar') {
@@ -87,6 +90,17 @@ $plainPath = $files[0] ?? null;
 if ($plainPath === null || !is_file($plainPath)) {
     http_response_code(500);
     exit;
+}
+
+if ($type === 'picture') {
+    require_once __DIR__ . '/../src/PictureIngest.php';
+    $ext = strtolower((string) pathinfo($plainPath, PATHINFO_EXTENSION));
+    $contentType = \MyStash\PictureIngest::CONTENT_TYPES[$ext] ?? null;
+    if ($contentType === null) {
+        http_response_code(415);
+        exit;
+    }
+    header('X-Content-Type-Options: nosniff');
 }
 
 $size = filesize($plainPath);
@@ -157,7 +171,7 @@ function downloadFilename(string $id, string $plainPath): string
     $safe = (string) preg_replace('/\s+/', ' ', $safe);
 
     if ($safe === '') {
-        $safe = 'video-' . $id;
+        $safe = 'item-' . $id;
     }
 
     return $extension === '' ? $safe : "{$safe}.{$extension}";

@@ -29,13 +29,13 @@ trap cleanup EXIT
 
 clear_store
 curl -s -o /dev/null --data-urlencode "username=${PROBE}" --data-urlencode "password=${PASS}" \
-  --data-urlencode "confirm_password=${PASS}" http://localhost:8080/register.php
+  --data-urlencode "confirm_password=${PASS}" http://localhost:8090/register.php
 [ -d "App/Data/${PROBE}" ]; check "a throwaway stash exists to attack" $?
 
 attempt() { # username password -> "redirect|seconds"
   curl -s -o /dev/null -w '%{redirect_url}|%{time_total}' \
     --data-urlencode "username=$1" --data-urlencode "password=$2" \
-    http://localhost:8080/login.php
+    http://localhost:8090/login.php
 }
 
 mean_ms() { # username -> mean milliseconds over $2 attempts
@@ -114,10 +114,10 @@ check "the lockout window is bounded, so it always expires without intervention"
 # Attacking a locked name must not extend the lock — otherwise anyone who knows
 # the username can keep the owner out indefinitely just by keeping at it.
 FIRST=$(curl -s -o /dev/null -w '%{redirect_url}' -d "username=${PROBE}&password=${WRONG}" \
-  http://localhost:8080/login.php | sed 's/.*wait=//')
+  http://localhost:8090/login.php | sed 's/.*wait=//')
 for _ in $(seq 1 5); do attempt "$PROBE" "$WRONG" >/dev/null; done
 AFTER=$(curl -s -o /dev/null -w '%{redirect_url}' -d "username=${PROBE}&password=${WRONG}" \
-  http://localhost:8080/login.php | sed 's/.*wait=//')
+  http://localhost:8090/login.php | sed 's/.*wait=//')
 echo "  minutes remaining: ${FIRST} before five more attempts, ${AFTER} after"
 [ "${AFTER:-99}" -le "${FIRST:-0}" ]
 check "hammering a locked name does not extend the lockout" $?

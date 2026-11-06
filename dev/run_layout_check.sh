@@ -63,8 +63,8 @@ echo "ingested video {$entry["id"]}\n";
 ' || { echo "FAIL: could not build the throwaway stash"; fails=$((fails+1)); exit 1; }
 
 # --- start a conversion and look at the page while it runs ----------------
-curl -s -c "$JAR" -o /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8080/login.php
-curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8080/video_convert.php
+curl -s -c "$JAR" -o /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8090/login.php
+curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8090/video_convert.php
 
 $DC exec -T -e NODE_PATH=/opt/pwlib/node_modules \
   -e PROBE_USER="$PROBE" -e PROBE_PASS="$PASS" \

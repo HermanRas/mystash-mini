@@ -1,3 +1,30 @@
+# MyStash Mini
+
+A variation of [MyStash](../MyStash) — same encrypted, self-hosted stash, cut
+down to one flat library of videos **and pictures**:
+
+- **No creators.** Everything is credited to `default`; the Creators screen,
+  filter and edit fields are gone from the UI (the code is still there).
+- **The wall is three large tiles wide** (two on a tablet, one on a phone), and
+  **the filter panel starts closed**. Every type is shown by default, Shorts
+  and Pictures included.
+- **Bulk upload.** Pick any number of videos and pictures at once; they upload
+  one after another with a per-file list, and a file that fails fails alone.
+  Pictures (JPEG, PNG, GIF, WebP, BMP, AVIF) are stored encrypted as
+  `Video{ID}/{ID}.img.enc` beside a JPEG tile, with `kind: picture` in the index.
+- **Paging viewer.** Opening any tile shows ‹ › arrows; ← / → page through the
+  wall in its current filter and sort order, and Esc goes back to it.
+- Dev and prod both listen on **8090** (8080 is MyStash's), and the image is
+  `ghcr.io/hermanras/mystash-mini`. Never point Mini and MyStash at the same
+  data folder: MyStash does not know what a picture is.
+- **Upstream fixes:** this repo carries MyStash's history, with MyStash as the
+  `upstream` remote — `git fetch upstream && git merge upstream/main`.
+  `dev/playwright/check_mini.js` checks all of the above in a real browser.
+
+Everything below is the original MyStash README.
+
+---
+
 # MyStash v1.0.0
 
 ![MyStash](Docs/Assets/Banner.jpg)
@@ -10,7 +37,7 @@ nothing on any page is fetched from anyone else's server.
 *DEV*
 
 ```bash
-git clone https://github.com/HermanRas/MyStash.git mystash && cd mystash
+git clone https://github.com/HermanRas/mystash-mini.git mystash-mini && cd mystash-mini
 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
@@ -20,10 +47,10 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```yml
 services:
   app:
-    image: ghcr.io/hermanras/mystash:latest
+    image: ghcr.io/hermanras/mystash-mini:latest
     ports:
-      - "127.0.0.1:8080:8080"
-    container_name: mystash-app
+      - "127.0.0.1:8090:8080"
+    container_name: mystash-mini-app
     volumes:
       - /path/to/your/data:/app/Data
     # Not optional. Every decrypt, and every upload, stages plaintext in
@@ -34,7 +61,7 @@ services:
     restart: unless-stopped
 ```
 
-Then open <http://127.0.0.1:8080> and create a stash. Full instructions,
+Then open <http://127.0.0.1:8090> and create a stash. Full instructions,
 including what to do before anyone else can reach it, are in
 [Docs/DEPLOY.md](Docs/DEPLOY.md).
 

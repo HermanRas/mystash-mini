@@ -34,7 +34,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-Then open <http://127.0.0.1:8080> and create a stash.
+Then open <http://127.0.0.1:8090> and create a stash.
 
 That is a complete, working deployment **for one machine, used locally**. If
 anyone reaches it over a network, read §4 before you tell them the address.
@@ -67,7 +67,7 @@ someone's laptop is not one of them until something links it.
 
 ### What you are running, and how to build it yourself instead
 
-`docker-compose.prod.yml` runs `ghcr.io/hermanras/mystash`. Every push to
+`docker-compose.prod.yml` runs `ghcr.io/hermanras/mystash-mini`. Every push to
 `main` builds that image, starts it, checks it serves the app and runs the
 smoke suite, and only then publishes it (`.github/workflows/image.yml`) — so a
 published tag is an artefact that has already been started once and talked to,
@@ -122,7 +122,7 @@ There are three compose files and they layer:
 
 | File | What it adds |
 | --- | --- |
-| `docker-compose.yml` | the app itself: the one `app` container, port 8080, the 4 GB `/dev/shm`, `MYSTASH_DEV=1` |
+| `docker-compose.yml` | the app itself: the one `app` container, port 8090 on the host, the 4 GB `/dev/shm`, `MYSTASH_DEV=1` |
 | `docker-compose.prod.yml` | the published GHCR image, loopback-only port, no code mount, `restart: unless-stopped`, `MYSTASH_DEV=0` |
 | `docker-compose.dev.yml` | the Playwright container the `dev/` checks drive |
 
@@ -209,7 +209,7 @@ proxy in front of it and leave MyStash bound to loopback. Caddy is two lines:
 
 ```
 stash.example.internal {
-    reverse_proxy 127.0.0.1:8080
+    reverse_proxy 127.0.0.1:8090
 }
 ```
 
@@ -227,7 +227,7 @@ server {
     client_max_body_size 2G;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:8090;
         proxy_set_header Host              $host;
         proxy_set_header X-Forwarded-For   $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -317,8 +317,8 @@ had 1.8 TB free — because the device that was full was the container's
 snippet for exactly that reason. Check a running container with:
 
 ```bash
-docker exec mystash-app df -h /dev/shm        # Size must not read 64M
-docker inspect mystash-app --format '{{.HostConfig.ShmSize}}'
+docker exec mystash-mini-app df -h /dev/shm        # Size must not read 64M
+docker inspect mystash-mini-app --format '{{.HostConfig.ShmSize}}'
 ```
 
 4 GB is sized against the 2 GB upload cap below: a convert holds the original

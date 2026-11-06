@@ -36,7 +36,7 @@ jobs:
         # need not be — `HermanRas` is rejected outright by the builder. This
         # is done here rather than hardcoded so a fork publishes under its own
         # owner without editing the workflow.
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mystash" >> "$GITHUB_ENV"
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mystash-mini" >> "$GITHUB_ENV"
 
       - name: Build the image
         uses: docker/build-push-action@v7
@@ -45,7 +45,7 @@ jobs:
           # Loaded into the local daemon rather than pushed: the push is a
           # separate step at the end, after the checks below have passed.
           load: true
-          tags: mystash-app:latest
+          tags: mystashmini-app:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -62,7 +62,7 @@ jobs:
           # it, and every PHP request in that window is a 502. Waiting on the
           # redirect waits on both processes, which is the thing being tested.
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/ || true)
             [ "$code" = 302 ] && echo "ready after ${i}s" && exit 0
             # A container that has exited is never going to become ready, and
             # the reason is in its log rather than in another 59 seconds.
@@ -80,18 +80,18 @@ jobs:
           fail() { echo "::error::$1"; docker compose logs app; exit 1; }
 
           # nginx is up...
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/login.html)
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/login.html)
           [ "$code" = 200 ] || fail "login.html answered $code"
 
           # ...and php-fpm is alive behind it. A 502 here is the half-container
           # failure the entrypoint exists to prevent, and it is invisible to a
           # check that only asks nginx for a static file.
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/)
           [ "$code" = 302 ] || fail "/ answered $code, expected a redirect to the login page"
 
           # The font is served from this host, not Google's. Docs/SPECIFICATIONS.md §1.
           code=$(curl -s -o /dev/null -w '%{http_code}' \
-                   http://localhost:8080/assets/fonts/carter-one-latin-400.woff2)
+                   http://localhost:8090/assets/fonts/carter-one-latin-400.woff2)
           [ "$code" = 200 ] || fail "the self-hosted font answered $code"
 
           # Both processes are in there.

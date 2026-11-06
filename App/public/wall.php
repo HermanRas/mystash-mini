@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../src/Session.php';
 require_once __DIR__ . '/../src/VideoQuery.php';
-require_once __DIR__ . '/../src/VideoCreators.php';
 
 use MyStash\Session;
-use MyStash\VideoCreators;
 use MyStash\VideoQuery;
 
 Session::requireLogin();
@@ -20,17 +18,6 @@ $query = VideoQuery::fromRequest($_GET);
 $videos = $query->apply($index['videos'] ?? [], $creators);
 $total = count($index['videos'] ?? []);
 
-// Gender is a free-text field on the creator form, so the filter offers the
-// values actually in use rather than a fixed list that might match nobody.
-// Compared case-insensitively, but offered with the spelling the user typed.
-$genders = [];
-foreach ($creators as $creator) {
-    $gender = trim((string) ($creator['gender'] ?? ''));
-    if ($gender !== '' && !isset($genders[mb_strtolower($gender)])) {
-        $genders[mb_strtolower($gender)] = $gender;
-    }
-}
-ksort($genders);
 
 require_once __DIR__ . '/../views/format.php';
 
@@ -60,7 +47,19 @@ $sortHref = static function (string $sort) use ($query): string {
         'age_min' => $query->minAge,
         'age_max' => $query->maxAge,
         'sort' => $sort,
+        ...(isset($_GET['panel']) ? ['panel' => 1] : []),
     ]);
+};
+
+// Filters start closed (MyStashMini). Submitting the panel's own form carries
+// panel=1, so applying a filter does not snap the panel shut under the user.
+$filtersOpen = isset($_GET['panel']);
+
+// Every tile links to the viewer with the wall's own query, so its < > arrows
+// page through exactly this wall in exactly this order.
+$wallParams = $query->toParams();
+$viewHref = static function (string $id) use ($wallParams): string {
+    return 'video.php?' . http_build_query(['id' => $id, ...$wallParams]);
 };
 
 $navActive = 'videos';
@@ -74,8 +73,8 @@ $headerActions = '<button class="icon-btn square" id="upload-toggle" title="Uplo
        gesture instead, and said "Filters" nowhere. The open/closed state it
        used to carry moves onto the button itself, which lights up amber while
        the panel is showing. */
-    . '<button class="icon-btn square active" id="filters-toggle" title="Filters" aria-label="Filters"'
-    . ' aria-expanded="true" aria-controls="filter-panel">'
+    . '<button class="icon-btn square' . ($filtersOpen ? ' active' : '') . '" id="filters-toggle" title="Filters" aria-label="Filters"'
+    . ' aria-expanded="' . ($filtersOpen ? 'true' : 'false') . '" aria-controls="filter-panel">'
     . '<img class="btn-icon" src="assets/img/icons/filter.png" alt=""></button>';
 ?>
 <!doctype html>
@@ -83,7 +82,7 @@ $headerActions = '<button class="icon-btn square" id="upload-toggle" title="Uplo
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MyStash — Wall</title>
+<title>MyStash Mini — Wall</title>
 <link rel="icon" href="assets/img/icon.png" type="image/png">
 <link rel="stylesheet" href="assets/style.css">
 </head>
@@ -129,21 +128,16 @@ $uploadLimit = min(
            building the element on the fly. */ ?>
   <p class="upload-error"<?= $uploadError === '' ? ' hidden' : '' ?>><?= htmlspecialchars($uploadError, ENT_QUOTES) ?></p>
   <form action="upload.php" method="post" enctype="multipart/form-data">
+    <?php /* Any number of videos and pictures at once. upload.js sends them
+             one per request, in order; without JS they go in a single post. A
+             video's tile frame can be changed afterwards on its edit screen. */ ?>
     <div class="field">
-      <label for="video-file">Video file</label>
-      <input type="file" id="video-file" name="video" accept="video/*" required>
+      <label for="media-files">Videos and pictures — pick as many as you like</label>
+      <input type="file" id="media-files" name="media[]" accept="video/*,image/*" multiple required>
     </div>
     <div class="field">
-      <label for="preview-at">Preview capture time, seconds (optional — defaults to 15s)</label>
+      <label for="preview-at">Video thumbnail capture time, seconds (optional — defaults to 15s)</label>
       <input type="number" id="preview-at" name="preview_at" min="0" step="1" placeholder="15">
-    </div>
-    <?php /* 3.9 — a picture of your own instead of a frame from the video.
-             Attaching one wins over the capture time above: someone who chose
-             an image meant it. Either can be changed afterwards from the
-             video's edit screen, which is the half that was missing entirely. */ ?>
-    <div class="field">
-      <label for="preview-image">Preview image (optional — overrides the capture time)</label>
-      <input type="file" id="preview-image" name="preview_image" accept="image/*">
     </div>
     <button type="submit" class="btn">Upload</button>
   </form>
@@ -158,12 +152,13 @@ $uploadLimit = min(
     <div class="section-title" style="margin-top:0;" id="upload-message">Uploading</div>
     <div class="progress"><div class="progress-bar" id="upload-bar"></div></div>
     <p class="hint job-message" id="upload-detail"></p>
+    <ol class="upload-queue" id="upload-queue"></ol>
     <button type="button" class="btn secondary small" id="upload-cancel">Cancel</button>
   </div>
 </div>
 
 <div class="layout">
-  <aside class="filter-panel" id="filter-panel">
+  <aside class="filter-panel<?= $filtersOpen ? '' : ' closed' ?>" id="filter-panel">
     <h2 class="filter-title">
       <img class="filter-icon" src="assets/img/icons/filter.png" alt="">Filters
     </h2>
@@ -172,6 +167,7 @@ $uploadLimit = min(
       <input type="hidden" name="sort" value="<?= htmlspecialchars($query->sort, ENT_QUOTES) ?>">
       <?php /* Narrowing an existing search must not throw the search away. */ ?>
       <input type="hidden" name="q" value="<?= htmlspecialchars($query->search, ENT_QUOTES) ?>">
+      <input type="hidden" name="panel" value="1">
 
       <?php /* Native <details> accordions — no JS needed. Categories is the
                one open by default; the others remember nothing between loads
@@ -212,7 +208,7 @@ $uploadLimit = min(
       </details>
 
       <details class="filter-section" <?= $query->minMinutes > 0 || $query->maxMinutes < VideoQuery::MAX_LENGTH_MINUTES ? 'open' : '' ?>>
-        <summary><span class="filter-summary-label"><img class="filter-icon" src="assets/img/icons/videos.png" alt="">Videos</span></summary>
+        <summary><span class="filter-summary-label"><img class="filter-icon" src="assets/img/icons/videos.png" alt="">Length</span></summary>
         <div class="filter-row">
           <label>Longer than <output id="len-min-out"><?= $query->minMinutes ?>m</output></label>
           <input type="range" id="len-min" name="len_min" min="0" max="<?= VideoQuery::MAX_LENGTH_MINUTES ?>" step="1" value="<?= $query->minMinutes ?>">
@@ -220,48 +216,6 @@ $uploadLimit = min(
         <div class="filter-row">
           <label>Shorter than <output id="len-max-out"><?= $query->maxMinutes ?>m</output></label>
           <input type="range" id="len-max" name="len_max" min="0" max="<?= VideoQuery::MAX_LENGTH_MINUTES ?>" step="1" value="<?= $query->maxMinutes ?>">
-        </div>
-      </details>
-
-      <details class="filter-section" <?= $query->creators !== [] || $query->filtersByCreatorAttributes() ? 'open' : '' ?>>
-        <summary><span class="filter-summary-label"><img class="filter-icon" src="assets/img/icons/creator.png" alt="">Creators</span></summary>
-        <?php foreach (array_keys($creators) as $name): ?>
-          <div class="filter-row">
-            <label class="check-row">
-              <input type="checkbox" name="creator[]" value="<?= htmlspecialchars($name, ENT_QUOTES) ?>"
-                     <?= $query->hasCreator($name) ? 'checked' : '' ?>>
-              <?= htmlspecialchars($name, ENT_QUOTES) ?>
-            </label>
-          </div>
-        <?php endforeach; ?>
-
-        <?php /* Age and gender belong to the creator, not the video: a video
-                 matches when any one of the people credited on it does. */ ?>
-        <div class="filter-row">
-          <label>Age at least <output id="age-min-out"><?= $query->minAge ?></output></label>
-          <input type="range" id="age-min" name="age_min" min="<?= VideoQuery::MIN_AGE ?>" max="<?= VideoQuery::MAX_AGE ?>" step="1" value="<?= $query->minAge ?>">
-        </div>
-        <div class="filter-row">
-          <label>Age at most <output id="age-max-out"><?= $query->maxAge ?></output></label>
-          <input type="range" id="age-max" name="age_max" min="<?= VideoQuery::MIN_AGE ?>" max="<?= VideoQuery::MAX_AGE ?>" step="1" value="<?= $query->maxAge ?>">
-        </div>
-        <div class="filter-row">
-          <label for="gender">Gender</label>
-          <?php if ($genders === [] && $query->gender === ''): ?>
-            <p class="hint" style="margin:0;">No creator has a gender set.</p>
-          <?php else: ?>
-            <select id="gender" name="gender">
-              <option value="">Any</option>
-              <?php /* Keep an unknown value from the URL selectable, so the
-                       filter doesn't silently reset to Any. */ ?>
-              <?php foreach (array_unique(array_merge(array_values($genders), $query->gender === '' ? [] : [$query->gender])) as $gender): ?>
-                <option value="<?= htmlspecialchars($gender, ENT_QUOTES) ?>"
-                        <?= strcasecmp($gender, $query->gender) === 0 ? 'selected' : '' ?>>
-                  <?= htmlspecialchars($gender, ENT_QUOTES) ?>
-                </option>
-              <?php endforeach; ?>
-            </select>
-          <?php endif; ?>
         </div>
       </details>
 
@@ -275,7 +229,7 @@ $uploadLimit = min(
   <main class="container">
     <div class="wall-toolbar">
       <span class="wall-count">
-        <?= count($videos) ?> of <?= $total ?> video<?= $total === 1 ? '' : 's' ?>
+        <?= count($videos) ?> of <?= $total ?> item<?= $total === 1 ? '' : 's' ?>
         <?php if ($query->search !== ''): ?>
           matching <strong class="wall-term"><?= htmlspecialchars($query->search, ENT_QUOTES) ?></strong><?php
             /* The filter panel may be narrowing the search further. */
@@ -306,22 +260,26 @@ $uploadLimit = min(
     <div class="video-grid">
 
       <?php foreach ($videos as $video): ?>
-        <a class="video-card" href="video.php?id=<?= urlencode($video['id']) ?>"
+        <?php $isPicture = ($video['kind'] ?? 'video') === 'picture'; ?>
+        <a class="video-card<?= $isPicture ? ' picture' : '' ?>" href="<?= htmlspecialchars($viewHref((string) $video['id']), ENT_QUOTES) ?>"
            style="--tile-a:<?= htmlspecialchars($video['tile_gradient'][0] ?? '#333', ENT_QUOTES) ?>; --tile-b:<?= htmlspecialchars($video['tile_gradient'][1] ?? '#161616', ENT_QUOTES) ?>;">
           <div class="thumb">
             <div class="thumb-gradient"></div>
             <img class="thumb-image" src="media.php?id=<?= urlencode($video['id']) ?>&type=thumb" alt="" loading="lazy" onerror="this.style.display='none'">
-            <video class="thumb-preview" muted loop playsinline preload="none" src="media.php?id=<?= urlencode($video['id']) ?>&type=preview"></video>
-            <?php if (!empty($video['quality'])): ?>
-              <span class="badge quality"><?= htmlspecialchars($video['quality'], ENT_QUOTES) ?></span>
+            <?php if ($isPicture): ?>
+              <span class="badge duration">Picture</span>
+            <?php else: ?>
+              <video class="thumb-preview" muted loop playsinline preload="none" src="media.php?id=<?= urlencode($video['id']) ?>&type=preview"></video>
+              <?php if (!empty($video['quality'])): ?>
+                <span class="badge quality"><?= htmlspecialchars($video['quality'], ENT_QUOTES) ?></span>
+              <?php endif; ?>
+              <span class="badge duration"><?= formatLength((int) $video['length_seconds']) ?></span>
+              <div class="preview-progress"></div>
             <?php endif; ?>
-            <span class="badge duration"><?= formatLength((int) $video['length_seconds']) ?></span>
-            <div class="preview-progress"></div>
           </div>
           <div class="tile-title"><?= htmlspecialchars($video['title'], ENT_QUOTES) ?></div>
-          <div class="tile-creator"><?= htmlspecialchars(VideoCreators::label($video), ENT_QUOTES) ?></div>
           <div class="tile-stats">
-            <?= formatLength((int) $video['length_seconds']) ?> • <?= (int) $video['views'] ?> view<?= (int) $video['views'] === 1 ? '' : 's' ?><?php
+            <?= $isPicture ? 'Picture' : formatLength((int) $video['length_seconds']) ?> • <?= (int) $video['views'] ?> view<?= (int) $video['views'] === 1 ? '' : 's' ?><?php
               if (!empty($video['categories'])): ?> • <?= htmlspecialchars(implode(', ', $video['categories']), ENT_QUOTES) ?><?php endif; ?>
           </div>
         </a>
@@ -331,12 +289,12 @@ $uploadLimit = min(
         <p class="hint">
           <?php if ($query->search !== ''): ?>
             Nothing matches <strong class="wall-term"><?= htmlspecialchars($query->search, ENT_QUOTES) ?></strong>
-            in any title, creator or category tag.
+            in any title or category tag.
             <a href="wall.php" style="color:var(--accent);">Clear the search</a>
           <?php elseif ($query->isFiltered() && $total > 0): ?>
-            No videos match these filters.
+            Nothing matches these filters.
           <?php else: ?>
-            No videos yet — upload one to get started.
+            Nothing here yet — upload some videos or pictures to get started.
           <?php endif; ?>
         </p>
       <?php endif; ?>

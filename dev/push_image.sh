@@ -15,11 +15,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-IMAGE="ghcr.io/hermanras/mystash"
+IMAGE="ghcr.io/hermanras/mystash-mini"
 TAG="${1:-latest}"
 PORT=8099                     # not 8080: whatever you have running stays running
-PROJECT="mystashpush"
-LOCAL="mystash-push:${TAG}"
+PROJECT="mystashminipush"
+LOCAL="mystash-mini-push:${TAG}"
 fails=0
 
 cleanup() {

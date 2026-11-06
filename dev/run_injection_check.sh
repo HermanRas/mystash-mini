@@ -51,7 +51,7 @@ curl -s -c "$JAR" -o /dev/null \
   --data-urlencode "username=${PROBE}" \
   --data-urlencode "password=${PASS}" \
   --data-urlencode "confirm_password=${PASS}" \
-  http://localhost:8080/register.php
+  http://localhost:8090/register.php
 
 [ -d "App/Data/${PROBE}" ]; check "a stash registers with a password of pure shell metacharacters" $?
 
@@ -59,15 +59,15 @@ curl -s -c "$JAR" -o /dev/null \
 rm -f "$JAR"
 curl -s -c "$JAR" -o /dev/null \
   --data-urlencode "username=${PROBE}" --data-urlencode "password=${PASS}" \
-  http://localhost:8080/login.php
-WALL=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' http://localhost:8080/wall.php)
+  http://localhost:8090/login.php
+WALL=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' http://localhost:8090/wall.php)
 [ "$WALL" = "200" ]; check "...and it logs back in, so the password was stored verbatim (HTTP ${WALL})" $?
 
 # --- upload with a hostile filename through the real form ----------------
 cp "$FIXTURE" "/tmp/${PROBE}.mp4"
 UP=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' \
   -F 'video=@/tmp/'"${PROBE}"'.mp4;filename=evil$(touch /tmp/c-fn)`touch /tmp/c-up`;id.mp4' \
-  http://localhost:8080/upload.php)
+  http://localhost:8090/upload.php)
 echo "  upload.php answered ${UP}"
 [ -d "App/Data/${PROBE}/videos/Video1" ]; check "a video with a hostile filename uploads normally" $?
 
@@ -82,7 +82,7 @@ done
 cp "$FIXTURE" "/tmp/${PROBE}.mp4"
 curl -s -b "$JAR" -o /dev/null \
   -F "video=@/tmp/${PROBE}.mp4;filename=far.mp4" -F "preview_at=999999" \
-  http://localhost:8080/upload.php
+  http://localhost:8090/upload.php
 [ -f "App/Data/${PROBE}/videos/Video2/2.jpg.preview.enc" ]
 check "an out-of-range preview_at still produces a video with a preview" $?
 
@@ -92,7 +92,7 @@ check "an out-of-range preview_at still produces a video with a preview" $?
 # more than once (thumbnail and hover clip), so a plain grep -c would pass
 # however many directories were orphaned.
 ONDISK=$(ls -d App/Data/${PROBE}/videos/Video* 2>/dev/null | sed 's/.*Video//' | sort -u | tr '\n' ' ')
-ONWALL=$(curl -s -b "$JAR" http://localhost:8080/wall.php \
+ONWALL=$(curl -s -b "$JAR" http://localhost:8090/wall.php \
   | grep -o 'media\.php?id=[0-9]*' | sed 's/.*=//' | sort -u | tr '\n' ' ')
 echo "  ids on disk: [${ONDISK}] ids on the wall: [${ONWALL}]"
 [ -n "$ONDISK" ] && [ "$ONDISK" = "$ONWALL" ]
@@ -104,7 +104,7 @@ check "no orphaned video directories: the ids on disk are exactly the ids on the
 for BAD in '../../etc/passwd' 'convert;id' 'rekey/../../..' '' 'CONVERT'; do
   CODE=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' \
     --get --data-urlencode "kind=${BAD}" --data-urlencode "target=1" \
-    http://localhost:8080/job_status.php)
+    http://localhost:8090/job_status.php)
   [ "$CODE" = "400" ]; check "job_status.php refuses kind='${BAD}' (HTTP ${CODE})" $?
 done
 

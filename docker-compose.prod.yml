@@ -20,14 +20,15 @@
 #    errors to the browser (App/php.prod.ini).
 services:
   app:
-    image: ghcr.io/hermanras/mystash:${MYSTASH_TAG:-latest}
+    image: ghcr.io/hermanras/mystash-mini:${MYSTASH_TAG:-latest}
     # Nothing is built here. Without this the base file's `build:` still
     # applies and `up --build` would quietly replace the published image with
     # one compiled from whatever is in this working tree.
     build: !reset null
     ports: !override
-      - "127.0.0.1:8080:8080"
-    container_name: mystash-app
+      # 8090 so MyStash proper (8080) can run on the same host.
+      - "127.0.0.1:8090:8080"
+    container_name: mystash-mini-app
     volumes: !override
       - ./App/Data:/app/Data
     # Repeated from the base file even though Compose would merge it in,

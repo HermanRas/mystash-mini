@@ -42,13 +42,18 @@ final class VideoQuery
         'short' => 'Shorts',
         'video' => 'Videos',
         'movie' => 'Movies',
+        'picture' => 'Pictures',
     ];
 
     public const SHORT_MAX_SECONDS = 4 * 60;
     public const MOVIE_MIN_SECONDS = 30 * 60;
 
-    /** What the wall shows when it opens: everything but shorts. */
-    public const DEFAULT_TYPES = ['video', 'movie'];
+    /**
+     * What the wall shows when it opens: everything. (MyStash proper hides
+     * shorts; in Mini the filter panel starts closed, so a hidden type would
+     * look like a lost upload.)
+     */
+    public const DEFAULT_TYPES = ['short', 'video', 'movie', 'picture'];
 
     /** Upper end of the length slider; at the maximum it means "no limit". */
     public const MAX_LENGTH_MINUTES = 180;
@@ -153,6 +158,14 @@ final class VideoQuery
     public function hasType(string $type): bool
     {
         return in_array($type, $this->types, true);
+    }
+
+    /** picture, or the video's band by running time. */
+    public static function typeOfEntry(array $entry): string
+    {
+        return ($entry['kind'] ?? 'video') === 'picture'
+            ? 'picture'
+            : self::typeOf((int) ($entry['length_seconds'] ?? 0));
     }
 
     /** short, video or movie, from a running time in seconds. */
@@ -283,6 +296,40 @@ final class VideoQuery
     }
 
     /**
+     * This query as wall.php URL parameters, with only what differs from a bare
+     * wall — so the watch page can carry it to its prev/next links and back.
+     *
+     * @return array<string, mixed>
+     */
+    public function toParams(): array
+    {
+        $params = [];
+        if ($this->search !== '') {
+            $params['q'] = $this->search;
+        }
+        if ($this->categories !== []) {
+            $params['category'] = $this->categories;
+        }
+        if ($this->creators !== []) {
+            $params['creator'] = $this->creators;
+        }
+        if ($this->types != self::DEFAULT_TYPES) {
+            $params['type'] = ['', ...$this->types];
+        }
+        if ($this->minMinutes > 0) {
+            $params['len_min'] = $this->minMinutes;
+        }
+        if ($this->maxMinutes < self::MAX_LENGTH_MINUTES) {
+            $params['len_max'] = $this->maxMinutes;
+        }
+        if ($this->sort !== self::DEFAULT_SORT) {
+            $params['sort'] = $this->sort;
+        }
+
+        return $params;
+    }
+
+    /**
      * @param list<array> $videos index entries
      * @param array<string, array> $creators name => index summary, for the age
      *        and gender filters; they are attributes of the creator, not of the
@@ -296,13 +343,14 @@ final class VideoQuery
                 return false;
             }
 
-            if (!$this->hasType(self::typeOf((int) ($video['length_seconds'] ?? 0)))) {
+            if (!$this->hasType(self::typeOfEntry($video))) {
                 return false;
             }
 
             $minutes = ((int) ($video['length_seconds'] ?? 0)) / 60;
+            $isPicture = ($video['kind'] ?? 'video') === 'picture';
 
-            if ($minutes < $this->minMinutes) {
+            if (!$isPicture && $minutes < $this->minMinutes) {
                 return false;
             }
 
@@ -343,8 +391,10 @@ final class VideoQuery
             'views_desc' => static fn($a, $b) => $b['views'] <=> $a['views'],
             // Entries predating uploaded_at have no date to sort on; they sort
             // oldest either way rather than jumping to the top of the wall.
-            'uploaded_asc' => static fn($a, $b) => ($a['uploaded_at'] ?? '') <=> ($b['uploaded_at'] ?? ''),
-            default => static fn($a, $b) => ($b['uploaded_at'] ?? '') <=> ($a['uploaded_at'] ?? ''),
+            // A bulk upload lands many entries in the same second, so the id
+            // (which only ever grows) breaks the tie in upload order.
+            'uploaded_asc' => static fn($a, $b) => [($a['uploaded_at'] ?? ''), (int) $a['id']] <=> [($b['uploaded_at'] ?? ''), (int) $b['id']],
+            default => static fn($a, $b) => [($b['uploaded_at'] ?? ''), (int) $b['id']] <=> [($a['uploaded_at'] ?? ''), (int) $a['id']],
         };
     }
 }

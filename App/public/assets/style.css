@@ -451,7 +451,7 @@ h3,
   align-items: flex-start;
 }
 
-/* Open by default; the Filters button collapses it. */
+/* Closed by default in Mini (wall.php adds .closed); the Filters button opens it. */
 .filter-panel {
   flex: 0 0 260px;
   width: 260px;
@@ -688,10 +688,28 @@ select option {
   padding: 20px 24px;
 }
 
+/* MyStashMini: three large tiles across, however wide the window — two on a
+   tablet, one on a phone (see the media queries just below). */
 .video-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+
+@media (max-width: 1000px) {
+  .video-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .video-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.video-grid .tile-title {
+  font-size: 16px;
 }
 
 .video-card {
@@ -1917,3 +1935,110 @@ select option {
 .trim-range output {
   margin: 0;
 }
+
+
+/* ---------- Viewer: prev / next (MyStashMini) ---------- */
+
+.viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.viewer-head .watch-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.viewer-back,
+.viewer-count {
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.viewer-back:hover {
+  color: var(--accent);
+}
+
+.viewer-stage {
+  position: relative;
+}
+
+.viewer-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 52px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 56px;
+  line-height: 1;
+  color: #fff;
+  text-decoration: none;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
+  opacity: 0.75;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.viewer-nav:hover,
+.viewer-nav:focus-visible {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--accent);
+}
+
+.viewer-nav.prev {
+  left: 10px;
+}
+
+.viewer-nav.next {
+  right: 10px;
+}
+
+/* A picture is shown whole, at its own shape, rather than cropped to 16:9. */
+.player.picture {
+  aspect-ratio: auto;
+  min-height: 320px;
+}
+
+.player.picture img {
+  display: block;
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+}
+
+/* ---------- Bulk upload queue (MyStashMini) ---------- */
+
+.upload-queue {
+  list-style: none;
+  margin: 8px 0 12px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.upload-queue li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  color: var(--text-muted);
+}
+
+.upload-queue li .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-queue li.active { color: var(--text); }
+.upload-queue li.done .state { color: var(--accent); }
+.upload-queue li.failed .state { color: #ff6b6b; }

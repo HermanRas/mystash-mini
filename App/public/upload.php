@@ -7,85 +7,133 @@ require_once __DIR__ . '/../src/VideoEncoder.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/Jobs.php';
 require_once __DIR__ . '/../src/VideoIngest.php';
+require_once __DIR__ . '/../src/PictureIngest.php';
 require_once __DIR__ . '/../src/Session.php';
 
 use MyStash\Datastore;
 use MyStash\Jobs;
+use MyStash\PictureIngest;
 use MyStash\Session;
 use MyStash\VideoIngest;
 
+/**
+ * Upload one or more videos and/or pictures (MyStashMini bulk upload).
+ *
+ * The form field is `media[]` and may hold any number of files. upload.js sends
+ * them one per request, in sequence, with `X-Requested-With: fetch`, and gets
+ * JSON back; without JS the browser posts them all at once and is redirected
+ * to the wall. Either way the files are ingested one after another inside this
+ * request and the index is saved after each, so a failure part-way keeps
+ * everything before it.
+ *
+ * One at a time is not a convenience: every upload rewrites the whole index, so
+ * two requests running side by side would each save a copy missing the other's
+ * entry.
+ */
+
 Session::requireLogin();
+
+$wantsJson = ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'fetch';
+
+$respond = static function (array $added, array $errors) use ($wantsJson): never {
+    if ($wantsJson) {
+        http_response_code($added === [] && $errors !== [] ? 422 : 200);
+        header('Content-Type: application/json');
+        echo json_encode(['added' => $added, 'errors' => $errors]);
+        exit;
+    }
+
+    header('Location: wall.php' . ($errors === [] ? '' : '?upload_error=' . urlencode(implode(' ', $errors))));
+    exit;
+};
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: wall.php');
     exit;
 }
 
-$file = $_FILES['video'] ?? null;
-if ($file === null || $file['error'] !== UPLOAD_ERR_OK) {
-    header('Location: wall.php?upload_error=' . urlencode(
-        ($file['error'] ?? null) === UPLOAD_ERR_INI_SIZE
-            ? 'That file is larger than the upload limit.'
-            : 'No video was received.',
-    ));
-    exit;
+// Normalise `media[]` (and the original single `video` field) into a list.
+$files = [];
+foreach (['media', 'video'] as $field) {
+    $f = $_FILES[$field] ?? null;
+    if ($f === null) {
+        continue;
+    }
+    if (is_array($f['name'])) {
+        foreach (array_keys($f['name']) as $i) {
+            $files[] = [
+                'name' => (string) $f['name'][$i],
+                'tmp_name' => (string) $f['tmp_name'][$i],
+                'error' => (int) $f['error'][$i],
+            ];
+        }
+    } else {
+        $files[] = ['name' => (string) $f['name'], 'tmp_name' => (string) $f['tmp_name'], 'error' => (int) $f['error']];
+    }
+}
+
+$files = array_values(array_filter($files, static fn(array $f) => $f['error'] !== UPLOAD_ERR_NO_FILE));
+
+if ($files === []) {
+    // An empty $_FILES on a POST that clearly carried a body means PHP threw it
+    // away for exceeding post_max_size.
+    $respond([], [(int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0
+        ? 'That upload is larger than the upload limit.'
+        : 'No file was received.']);
 }
 
 $previewAt = isset($_POST['preview_at']) && $_POST['preview_at'] !== ''
     ? (float) $_POST['preview_at']
     : null;
 
-// An optional picture to use as the preview instead of a frame from the video
-// (3.9). Unlike the video itself a missing or failed one is not fatal —
-// ingestion falls back to the capture time.
-$previewImage = $_FILES['preview_image'] ?? null;
-$previewImagePath = ($previewImage !== null && $previewImage['error'] === UPLOAD_ERR_OK)
-    ? $previewImage['tmp_name']
-    : null;
+$added = [];
+$errors = [];
 
-$index = Session::refreshIndex();
+foreach ($files as $file) {
+    $name = $file['name'];
 
-// Ingestion throws when the file is not something it can make a wall tile
-// out of. Uncaught, that was a blank 500 from a button press — and a stack
-// trace on the page in any build with display_errors on. The message is the
-// one ingestion wrote, because "No frame could be read from this video" tells
-// the user what to do and "upload failed" does not.
-try {
-    $entry = (new VideoIngest())->ingest(
-        Session::user(),
-        Session::password(),
-        $file['tmp_name'],
-        $file['name'],
-        $index,
-        $previewAt,
-        $previewImagePath,
-    );
-} catch (\RuntimeException $e) {
-    header('Location: wall.php?upload_error=' . urlencode($e->getMessage()));
-    exit;
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        $errors[] = "{$name}: " . ($file['error'] === UPLOAD_ERR_INI_SIZE || $file['error'] === UPLOAD_ERR_FORM_SIZE
+            ? 'larger than the upload limit.'
+            : 'the upload did not complete.');
+        continue;
+    }
+
+    // Re-read before every file: another tab may have written in between.
+    $index = Session::refreshIndex();
+    $isPicture = PictureIngest::detect($file['tmp_name']) !== null;
+
+    // Ingestion throws when it cannot make a wall tile out of the file; the
+    // message it wrote says why, which "upload failed" would not.
+    try {
+        $entry = $isPicture
+            ? (new PictureIngest())->ingest(Session::user(), Session::password(), $file['tmp_name'], $name, $index)
+            : (new VideoIngest())->ingest(Session::user(), Session::password(), $file['tmp_name'], $name, $index, $previewAt);
+    } catch (\RuntimeException $e) {
+        $errors[] = "{$name}: {$e->getMessage()}";
+        continue;
+    }
+
+    $index['videos'][] = $entry;
+    (new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+    Session::setIndex($index);
+    $added[] = ['id' => $entry['id'], 'title' => $entry['title'], 'kind' => $isPicture ? 'picture' : 'video'];
+
+    // Videos only: the hover clip decodes the whole file, so it is a detached
+    // job started once the entry is saved (see VideoPreview::buildClip).
+    if (!$isPicture) {
+        $started = Jobs::start(
+            'preview',
+            Session::user(),
+            (string) $entry['id'],
+            ['password' => Session::password()],
+            ['message' => 'Starting…'],
+        );
+
+        if (!$started['ok']) {
+            error_log("MyStash upload: preview job not started: {$started['error']} ({$entry['id']})");
+        }
+    }
 }
 
-$index['videos'][] = $entry;
-
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
-Session::setIndex($index);
-
-// The hover clip decodes the whole video, which is what used to keep this
-// request open long enough for the reverse proxy to give up and answer 504
-// over an upload that had in fact worked. It is a detached job now, started
-// only once the entry is saved so the worker always finds the video it is
-// building for. If it fails the tile simply does not play on hover, and the
-// edit screen offers to try again.
-$started = Jobs::start(
-    'preview',
-    Session::user(),
-    (string) $entry['id'],
-    ['password' => Session::password()],
-    ['message' => 'Starting…'],
-);
-
-if (!$started['ok']) {
-    error_log("MyStash upload: preview job not started: {$started['error']} ({$entry['id']})");
-}
-
-header('Location: wall.php');
+$respond($added, $errors);

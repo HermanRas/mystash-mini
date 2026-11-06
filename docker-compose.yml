@@ -9,9 +9,10 @@ services:
     # Named explicitly rather than left to Compose's project-service default,
     # so CI can build the image once and then bring this up with --no-build
     # and know it is testing exactly the image it is about to publish.
-    image: mystash-app:latest
+    image: mystashmini-app:latest
     ports:
-      - "8080:8080"
+      # 8090, not 8080: MyStash proper and other projects use 8080/8081 here.
+      - "8090:8080"
     volumes:
       - ./App:/app
     # Development only. The image hardens PHP by default — display_errors off,

@@ -344,8 +344,10 @@ step(
 );
 
 step('a search counts as a filter', VideoQuery::fromRequest(['q' => 'x'])->isFiltered());
-step('a bare wall counts as filtered, since it hides shorts', VideoQuery::fromRequest([])->isFiltered());
-step('every type ticked is not filtered', !VideoQuery::fromRequest(['type' => ['', 'short', 'video', 'movie']])->isFiltered());
+// MyStashMini: the bare wall shows every type, pictures included.
+step('a bare wall is not filtered (Mini shows every type)', !VideoQuery::fromRequest([])->isFiltered());
+step('every type ticked is not filtered', !VideoQuery::fromRequest(['type' => ['', 'short', 'video', 'movie', 'picture']])->isFiltered());
+step('three of four types ticked is filtered', VideoQuery::fromRequest(['type' => ['', 'short', 'video', 'movie']])->isFiltered());
 
 // Type (shorts / videos / movies by running time).
 step(
@@ -358,12 +360,29 @@ $typed = [
     ['id' => 's', 'title' => 'S', 'categories' => [], 'length_seconds' => 30, 'views' => 0, 'uploaded_at' => '2026-03-01'],
     ['id' => 'v', 'title' => 'V', 'categories' => [], 'length_seconds' => 600, 'views' => 0, 'uploaded_at' => '2026-02-01'],
     ['id' => 'm', 'title' => 'M', 'categories' => [], 'length_seconds' => 5400, 'views' => 0, 'uploaded_at' => '2026-01-01'],
+    ['id' => 'p', 'kind' => 'picture', 'title' => 'P', 'categories' => [], 'length_seconds' => 0, 'views' => 0, 'uploaded_at' => '2025-12-01'],
 ];
 $typeIds = static fn(array $request): array => array_column(VideoQuery::fromRequest($request)->apply($typed), 'id');
 
-step('a bare wall shows videos and movies, not shorts', $typeIds([]) === ['v', 'm']);
+step('a bare wall shows everything, pictures included', $typeIds([]) === ['s', 'v', 'm', 'p']);
+step('ticking only Pictures shows only pictures', $typeIds(['type' => ['', 'picture']]) === ['p']);
+step('a picture is never a short, whatever its length', $typeIds(['type' => ['', 'short']]) === ['s']);
+step('the length slider does not hide pictures', $typeIds(['len_min' => 5]) === ['v', 'm', 'p']);
+step(
+    'toParams round-trips through fromRequest',
+    VideoQuery::fromRequest(VideoQuery::fromRequest(['q' => 'x', 'type' => ['', 'picture'], 'sort' => 'title_asc'])->toParams())
+        == VideoQuery::fromRequest(['q' => 'x', 'type' => ['', 'picture'], 'sort' => 'title_asc']),
+);
+step('a bare wall has no params to carry', VideoQuery::fromRequest([])->toParams() === []);
+step(
+    'same-second uploads sort by id, newest first',
+    array_column(VideoQuery::fromRequest([])->apply([
+        ['id' => '9', 'title' => 'a', 'length_seconds' => 600, 'views' => 0, 'uploaded_at' => '2026-01-01T00:00:00'],
+        ['id' => '10', 'title' => 'b', 'length_seconds' => 600, 'views' => 0, 'uploaded_at' => '2026-01-01T00:00:00'],
+    ]), 'id') === ['10', '9'],
+);
 step('ticking only Shorts shows only shorts', $typeIds(['type' => ['', 'short']]) === ['s']);
-step('unticking every type shows everything', $typeIds(['type' => ['']]) === ['s', 'v', 'm']);
+step('unticking every type shows everything', $typeIds(['type' => ['']]) === ['s', 'v', 'm', 'p']);
 step('an unknown type is ignored', $typeIds(['type' => ['', 'bogus', 'movie']]) === ['m']);
 
 // Legacy entries store a single `creator` string rather than a `creators` list.

@@ -38,6 +38,11 @@ $totalBytes = 0;
 $runningJob = null;
 
 foreach ($index['videos'] ?? [] as $video) {
+    // Pictures have nothing to inspect, reduce or trim.
+    if (($video['kind'] ?? 'video') === 'picture') {
+        continue;
+    }
+
     $id = (string) $video['id'];
     $bytes = VideoStats::diskBytes($user, $id);
     $totalBytes += $bytes;

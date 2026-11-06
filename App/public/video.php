@@ -8,6 +8,7 @@ require_once __DIR__ . '/../src/CreatorStore.php';
 require_once __DIR__ . '/../src/VideoCreators.php';
 require_once __DIR__ . '/../src/Jobs.php';
 require_once __DIR__ . '/../src/VideoPreview.php';
+require_once __DIR__ . '/../src/VideoQuery.php';
 
 use MyStash\CreatorStore;
 use MyStash\Datastore;
@@ -17,6 +18,7 @@ use MyStash\Session;
 use MyStash\VideoCategories;
 use MyStash\VideoCreators;
 use MyStash\VideoPreview;
+use MyStash\VideoQuery;
 
 Session::requireLogin();
 
@@ -39,6 +41,30 @@ if ($video === null) {
     header('Location: wall.php');
     exit;
 }
+
+$isPicture = ($video['kind'] ?? 'video') === 'picture';
+
+// Previous / next (MyStashMini). The wall hands over its own query string, so
+// this is the same filtered, sorted list the user was looking at. If this item
+// is not in it (the URL was edited, or a filter no longer matches after an
+// edit), page through the whole library in the default order instead.
+$query = VideoQuery::fromRequest($_GET);
+$sequence = $query->apply($videos, $creators);
+$ids = array_map(static fn(array $v) => (string) $v['id'], $sequence);
+$position = array_search($id, $ids, true);
+
+if ($position === false) {
+    $query = VideoQuery::fromRequest([]);
+    $ids = array_map(static fn(array $v) => (string) $v['id'], $query->apply($videos, $creators));
+    $position = array_search($id, $ids, true);
+}
+
+$wallParams = $query->toParams();
+$itemHref = static fn(string $itemId, array $extra = []): string
+    => 'video.php?' . http_build_query(['id' => $itemId, ...$wallParams, ...$extra]);
+$prevId = $position !== false && $position > 0 ? $ids[$position - 1] : null;
+$nextId = $position !== false && $position < count($ids) - 1 ? $ids[$position + 1] : null;
+$wallHref = 'wall.php' . ($wallParams === [] ? '' : '?' . http_build_query($wallParams));
 
 // A conversion runs in a detached worker (Docs/PLAN.md 4.28), so this page has
 // to ask how the last one for this video is getting on rather than assume.
@@ -89,7 +115,7 @@ $navActive = 'videos';
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MyStash — <?= htmlspecialchars($video['title'], ENT_QUOTES) ?></title>
+<title>MyStash Mini — <?= htmlspecialchars($video['title'], ENT_QUOTES) ?></title>
 <link rel="icon" href="assets/img/icon.png" type="image/png">
 <link rel="stylesheet" href="assets/style.css">
 </head>
@@ -130,17 +156,47 @@ $navActive = 'videos';
       </p>
     <?php endif; ?>
 
-    <h1 class="watch-title"><?= htmlspecialchars($video['title'], ENT_QUOTES) ?></h1>
+    <div class="viewer-head">
+      <a class="viewer-back" href="<?= htmlspecialchars($wallHref, ENT_QUOTES) ?>" title="Back to the wall (Esc)">&larr; Wall</a>
+      <h1 class="watch-title"><?= htmlspecialchars($video['title'], ENT_QUOTES) ?></h1>
+      <?php if ($position !== false): ?>
+        <span class="viewer-count"><?= $position + 1 ?> / <?= count($ids) ?></span>
+      <?php endif; ?>
+    </div>
 
-    <div class="player" id="player" data-video-src="media.php?id=<?= urlencode($id) ?>&amp;type=video">
-      <img src="media.php?id=<?= urlencode($id) ?>&amp;type=thumb" alt="" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;" onerror="this.style.display='none'">
-      <button type="button" id="player-play" style="position:relative; z-index:1; background:rgba(0,0,0,0.6); border:1px solid var(--border); color:#fff; border-radius:50%; width:64px; height:64px; font-size:20px; cursor:pointer;">▶</button>
+    <?php /* The ‹ › arrows sit on the stage itself, and ← / → do the same from
+             the keyboard (see the script below). They are plain links, so they
+             work without JavaScript and can be opened in a new tab. */ ?>
+    <div class="viewer-stage">
+      <?php if ($isPicture): ?>
+        <div class="player picture" id="player">
+          <img src="media.php?id=<?= urlencode($id) ?>&amp;type=picture" alt="<?= htmlspecialchars($video['title'], ENT_QUOTES) ?>">
+        </div>
+      <?php else: ?>
+        <div class="player" id="player" data-video-src="media.php?id=<?= urlencode($id) ?>&amp;type=video">
+          <img src="media.php?id=<?= urlencode($id) ?>&amp;type=thumb" alt="" style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;" onerror="this.style.display='none'">
+          <button type="button" id="player-play" style="position:relative; z-index:1; background:rgba(0,0,0,0.6); border:1px solid var(--border); color:#fff; border-radius:50%; width:64px; height:64px; font-size:20px; cursor:pointer;">▶</button>
+        </div>
+      <?php endif; ?>
+
+      <?php if ($prevId !== null): ?>
+        <a class="viewer-nav prev" id="viewer-prev" href="<?= htmlspecialchars($itemHref($prevId), ENT_QUOTES) ?>"
+           title="Previous (←)" aria-label="Previous">&lsaquo;</a>
+      <?php endif; ?>
+      <?php if ($nextId !== null): ?>
+        <a class="viewer-nav next" id="viewer-next" href="<?= htmlspecialchars($itemHref($nextId), ENT_QUOTES) ?>"
+           title="Next (→)" aria-label="Next">&rsaquo;</a>
+      <?php endif; ?>
     </div>
 
     <div class="watch-meta">
       <span id="view-count"><?= (int) $video['views'] ?></span>
       <span id="view-label">view<?= (int) $video['views'] === 1 ? '' : 's' ?></span>
-      • <?= formatLength((int) $video['length_seconds']) ?>
+      <?php if ($isPicture): ?>
+        • Picture<?php if (!empty($video['width']) && !empty($video['height'])): ?> • <?= (int) $video['width'] ?>×<?= (int) $video['height'] ?><?php endif; ?>
+      <?php else: ?>
+        • <?= formatLength((int) $video['length_seconds']) ?>
+      <?php endif; ?>
       <?php if (!empty($video['quality'])): ?> • <?= htmlspecialchars($video['quality'], ENT_QUOTES) ?><?php endif; ?>
       <?php if (!empty($video['not_converted'])): ?>
         • <span style="color:#cc4444;">Not Converted</span>
@@ -149,37 +205,19 @@ $navActive = 'videos';
 
     <div>
       <?php foreach ($assignments as $assignment): ?>
-        <button type="button" class="tag tag-jump" data-seconds="<?= (int) $assignment['timestamp_seconds'] ?>">
+        <button type="button" class="tag<?= $isPicture ? '' : ' tag-jump' ?>" data-seconds="<?= (int) $assignment['timestamp_seconds'] ?>">
           <span class="dot" style="background:<?= htmlspecialchars($categories[$assignment['name']] ?? '#888', ENT_QUOTES) ?>"></span>
           <?= htmlspecialchars($assignment['name'], ENT_QUOTES) ?>
-          <span class="ts"><?= VideoCategories::formatTimestamp((int) $assignment['timestamp_seconds']) ?></span>
+          <?php if (!$isPicture): ?>
+            <span class="ts"><?= VideoCategories::formatTimestamp((int) $assignment['timestamp_seconds']) ?></span>
+          <?php endif; ?>
         </button>
-      <?php endforeach; ?>
-    </div>
-
-    <?php /* Creators sit below the categories rather than in a side rail. A
-             video may credit more than one, so this is a list. */ ?>
-    <div class="section-title">Creator<?= count($videoCreators) === 1 ? '' : 's' ?></div>
-    <div class="creator-list">
-      <?php foreach ($videoCreators as $creatorName): ?>
-        <?php $avatar = creatorAvatarUrl($creators, $creatorName); ?>
-        <a class="card creator-strip" href="creator.php?edit=<?= urlencode($creatorName) ?>">
-          <div class="creator-avatar">
-            <?php if ($avatar !== null): ?>
-              <img src="<?= htmlspecialchars($avatar, ENT_QUOTES) ?>" alt="">
-            <?php endif; ?>
-          </div>
-          <div class="creator-strip-text">
-            <div class="creator-name"><?= htmlspecialchars($creatorName, ENT_QUOTES) ?></div>
-            <div class="creator-meta"><?= htmlspecialchars($creators[$creatorName]['bio'] ?? '', ENT_QUOTES) ?: 'no bio set' ?></div>
-          </div>
-        </a>
       <?php endforeach; ?>
     </div>
 
     <?php if (!$editing): ?>
       <div class="form-actions">
-        <a class="btn secondary" href="video.php?id=<?= urlencode($id) ?>&edit=1"><img class="btn-icon" src="assets/img/icons/video-edit.png" alt="">Edit Video</a>
+        <a class="btn secondary" href="<?= htmlspecialchars($itemHref($id, ['edit' => 1]), ENT_QUOTES) ?>"><img class="btn-icon" src="assets/img/icons/video-edit.png" alt="">Edit</a>
 
         <?php /* Built like the sort menu and the user menu — a trigger with a
                  panel that opens on hover or focus — so the three dropdowns on
@@ -209,14 +247,14 @@ $navActive = 'videos';
         <?php /* The way back out. Everything in the stash is encrypted with a
                  password 7zip holds, so without this the only way to get a
                  video off the wall again was the command line. */ ?>
-        <a class="btn secondary" href="media.php?id=<?= urlencode($id) ?>&amp;type=video&amp;download=1">
+        <a class="btn secondary" href="media.php?id=<?= urlencode($id) ?>&amp;type=<?= $isPicture ? 'picture' : 'video' ?>&amp;download=1">
           <img class="btn-icon" src="assets/img/icons/download.png" alt="">Download
         </a>
 
         <?php /* While a conversion is running the button is gone, not merely
                  disabled — a second run over the same archive is refused by the
                  job id anyway, but offering it would be a lie. */ ?>
-        <?php if (!empty($video['not_converted']) && !$converting): ?>
+        <?php if (!$isPicture && !empty($video['not_converted']) && !$converting): ?>
           <form action="video_convert.php" method="post">
             <input type="hidden" name="id" value="<?= htmlspecialchars($id, ENT_QUOTES) ?>">
             <button type="submit" class="btn">Convert to MP4/H.265</button>
@@ -229,7 +267,7 @@ $navActive = 'videos';
         <?= nl2br(htmlspecialchars($video['description'] ?? '', ENT_QUOTES)) ?: '<em>No description set.</em>' ?>
       </p>
     <?php else: ?>
-      <div class="section-title" style="margin-top:20px;">Edit Video</div>
+      <div class="section-title" style="margin-top:20px;">Edit <?= $isPicture ? 'Picture' : 'Video' ?></div>
       <div class="card">
         <form action="video_save.php" method="post">
           <input type="hidden" name="id" value="<?= htmlspecialchars($id, ENT_QUOTES) ?>">
@@ -241,22 +279,11 @@ $navActive = 'videos';
             <label for="v-description">Description</label>
             <input type="text" id="v-description" name="description" value="<?= htmlspecialchars($video['description'] ?? '', ENT_QUOTES) ?>">
           </div>
-          <div class="field">
-            <label>Creators</label>
-            <?php foreach (array_keys($creators) as $name): ?>
-              <div class="field inline-check" style="margin-bottom:6px;">
-                <label>
-                  <input type="checkbox" name="creators[]" value="<?= htmlspecialchars($name, ENT_QUOTES) ?>"
-                         <?= in_array($name, $videoCreators, true) ? 'checked' : '' ?>>
-                  <?= htmlspecialchars($name, ENT_QUOTES) ?>
-                </label>
-              </div>
-            <?php endforeach; ?>
-            <p class="hint" style="margin:6px 0 0;">A video can credit more than one creator. Tick none and it falls back to <code>default</code>.</p>
-          </div>
+          <?php /* No creators in Mini: everything stays on `default`. */ ?>
+          <input type="hidden" name="creators[]" value="default">
           <div class="form-actions">
             <button type="submit" class="btn"><img class="btn-icon" src="assets/img/icons/video-save.png" alt="">Save Changes</button>
-            <a class="btn secondary" href="video.php?id=<?= urlencode($id) ?>">Cancel</a>
+            <a class="btn secondary" href="<?= htmlspecialchars($itemHref($id), ENT_QUOTES) ?>">Cancel</a>
           </div>
         </form>
       </div>
@@ -266,6 +293,7 @@ $navActive = 'videos';
                wore it forever. Two ways out, because they answer different
                problems: a better moment in the video, or a picture that is not
                in the video at all. */ ?>
+      <?php if (!$isPicture): ?>
       <div class="section-title">Preview Image</div>
       <div class="card">
         <?php if (isset($_GET['preview'])): ?>
@@ -358,6 +386,7 @@ $navActive = 'videos';
           </form>
         </div>
       <?php endif; ?>
+      <?php endif; /* !$isPicture */ ?>
 
       <div class="section-title">Categories</div>
       <div class="card">
@@ -389,10 +418,14 @@ $navActive = 'videos';
               <?php endforeach; ?>
             </select>
           </div>
+          <?php if ($isPicture): ?>
+            <input type="hidden" name="timestamp" value="00:00:00">
+          <?php else: ?>
           <div class="field" style="margin-bottom:0; width:130px;">
             <label for="cat-ts">Time (hh:mm:ss)</label>
             <input type="text" id="cat-ts" name="timestamp" value="00:00:00" pattern="[0-9]{1,2}:[0-9]{2}:[0-9]{2}" required>
           </div>
+          <?php endif; ?>
           <button type="submit" class="btn">Add</button>
         </form>
         <p class="hint" style="margin-top:12px;">
@@ -401,9 +434,9 @@ $navActive = 'videos';
         </p>
       </div>
 
-      <form class="form-actions" action="video_delete.php" method="post" onsubmit="return confirm('Delete this video permanently?');">
+      <form class="form-actions" action="video_delete.php" method="post" onsubmit="return confirm('Delete this <?= $isPicture ? 'picture' : 'video' ?> permanently?');">
         <input type="hidden" name="id" value="<?= htmlspecialchars($id, ENT_QUOTES) ?>">
-        <button type="submit" class="btn secondary"><img class="btn-icon" src="assets/img/icons/video-delete.png" alt="">Delete Video</button>
+        <button type="submit" class="btn secondary"><img class="btn-icon" src="assets/img/icons/video-delete.png" alt="">Delete <?= $isPicture ? 'Picture' : 'Video' ?></button>
       </form>
     <?php endif; ?>
   </div>
@@ -458,7 +491,31 @@ $navActive = 'videos';
     video.play().catch(() => {});
   }
 
-  document.getElementById('player-play').addEventListener('click', () => startPlayback());
+  const playButton = document.getElementById('player-play');
+  if (playButton) playButton.addEventListener('click', () => startPlayback());
+
+  // A picture has nothing to press play on, so opening it is the view.
+  <?php if ($isPicture): ?>recordView();<?php endif; ?>
+
+  // ← / → page through the wall's list, Esc goes back to it. Typing in a form
+  // field is left alone, and so is any key held with a modifier (Alt+← is the
+  // browser's own Back).
+  document.addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const el = e.target;
+    if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
+
+    const go = (id) => {
+      const link = document.getElementById(id);
+      if (!link) return;
+      e.preventDefault();
+      window.location.href = link.href;
+    };
+
+    if (e.key === 'ArrowLeft') go('viewer-prev');
+    else if (e.key === 'ArrowRight') go('viewer-next');
+    else if (e.key === 'Escape') { e.preventDefault(); window.location.href = <?= json_encode($wallHref) ?>; }
+  });
 
   // Category chips jump the player to their timestamp.
   document.querySelectorAll('.tag-jump').forEach((chip) => {

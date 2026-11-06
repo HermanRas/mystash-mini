@@ -39,10 +39,10 @@ trap cleanup EXIT
 mkstash() { # name password
   curl -s -c "/tmp/$1.jar" -o /dev/null \
     --data-urlencode "username=$1" --data-urlencode "password=$2" \
-    --data-urlencode "confirm_password=$2" http://localhost:8080/register.php
+    --data-urlencode "confirm_password=$2" http://localhost:8090/register.php
   cp "$FIXTURE" "/tmp/$1.mp4"
   curl -s -b "/tmp/$1.jar" -o /dev/null \
-    -F "video=@/tmp/$1.mp4;filename=v.mp4" http://localhost:8080/upload.php
+    -F "video=@/tmp/$1.mp4;filename=v.mp4" http://localhost:8090/upload.php
 }
 
 mkstash "$ATK" "$PW"
@@ -57,12 +57,12 @@ BEFORE=$(victim_state)
 # --- the feature still works for its owner --------------------------------
 # Checked first and deliberately: it would be easy to "fix" isolation by
 # breaking deletion for everybody, and that would pass every test below.
-curl -s -b "/tmp/${ATK}.jar" -o /dev/null -d "id=1" http://localhost:8080/video_delete.php
+curl -s -b "/tmp/${ATK}.jar" -o /dev/null -d "id=1" http://localhost:8090/video_delete.php
 [ ! -d "App/Data/${ATK}/videos/Video1" ]; check "a user can still delete their own video" $?
 
 # Put it back, so the traversal attempts below have a real Video1 to pivot from.
 curl -s -b "/tmp/${ATK}.jar" -o /dev/null \
-  -F "video=@/tmp/${ATK}.mp4;filename=again.mp4" http://localhost:8080/upload.php
+  -F "video=@/tmp/${ATK}.mp4;filename=again.mp4" http://localhost:8090/upload.php
 
 # --- deleting across stashes ----------------------------------------------
 # The one that actually worked: deletion never decrypts, so the encryption
@@ -73,7 +73,7 @@ for BAD in \
   "../../../${VIC}/videos/Video1" \
   "1/../../.." ; do
   curl -s -b "/tmp/${ATK}.jar" -o /dev/null --data-urlencode "id=${BAD}" \
-    http://localhost:8080/video_delete.php
+    http://localhost:8090/video_delete.php
 done
 [ -d "App/Data/${VIC}/videos/Video1" ]
 check "video_delete.php cannot delete another user's video" $?
@@ -83,13 +83,13 @@ check "video_delete.php cannot delete another user's video" $?
 for T in thumb video preview; do
   CODE=$(curl -s -b "/tmp/${ATK}.jar" -o /dev/null -w '%{http_code}' \
     --get --data-urlencode "id=1/../../../${VIC}/videos/Video1" --data-urlencode "type=${T}" \
-    http://localhost:8080/media.php)
+    http://localhost:8090/media.php)
   [ "$CODE" = "400" ]; check "media.php refuses a traversing id for type=${T} (HTTP ${CODE})" $?
 done
 
 CODE=$(curl -s -b "/tmp/${ATK}.jar" -o /dev/null -w '%{http_code}' \
   --get --data-urlencode "type=avatar" --data-urlencode "creator=1/../../../${VIC}/creators/Creator1" \
-  http://localhost:8080/media.php)
+  http://localhost:8090/media.php)
 [ "$CODE" = "400" ]; check "media.php refuses a traversing creator id (HTTP ${CODE})" $?
 
 # --- writing across stashes -----------------------------------------------
@@ -97,18 +97,18 @@ CODE=$(curl -s -b "/tmp/${ATK}.jar" -o /dev/null -w '%{http_code}' \
 # writing, which is the interesting part.
 curl -s -b "/tmp/${ATK}.jar" -o /dev/null \
   --data-urlencode "id=1/../../../${VIC}/videos/Video1" --data-urlencode "name=Not Converted" \
-  --data-urlencode "timestamp=00:00:05" http://localhost:8080/video_category_add.php
+  --data-urlencode "timestamp=00:00:05" http://localhost:8090/video_category_add.php
 curl -s -b "/tmp/${ATK}.jar" -o /dev/null \
   --data-urlencode "id=1/../../../${VIC}/videos/Video1" --data-urlencode "title=owned" \
-  http://localhost:8080/video_save.php
+  http://localhost:8090/video_save.php
 curl -s -b "/tmp/${ATK}.jar" -o /dev/null \
-  --data-urlencode "id=1/../../../${VIC}/videos/Video1" http://localhost:8080/video_convert.php
+  --data-urlencode "id=1/../../../${VIC}/videos/Video1" http://localhost:8090/video_convert.php
 
 [ "$(victim_state)" = "$BEFORE" ]
 check "no endpoint changed a single byte of the victim's stash" $?
 
 # --- the wall shows only your own -----------------------------------------
-ATK_WALL=$(curl -s -b "/tmp/${ATK}.jar" http://localhost:8080/wall.php)
+ATK_WALL=$(curl -s -b "/tmp/${ATK}.jar" http://localhost:8090/wall.php)
 printf '%s' "$ATK_WALL" | grep -q "$VIC"; [ $? -ne 0 ]
 check "the attacker's wall does not mention the victim anywhere" $?
 
@@ -117,10 +117,10 @@ check "the attacker's wall does not mention the victim anywhere" $?
 # cannot be opened is a stash that cannot be opened, whichever the reason.
 REAL=$(curl -s -o /dev/null -w '%{http_code}|%{redirect_url}' \
   --data-urlencode "username=${VIC}" --data-urlencode "password=wrong-password-entirely-aaaa" \
-  http://localhost:8080/login.php)
+  http://localhost:8090/login.php)
 FAKE=$(curl -s -o /dev/null -w '%{http_code}|%{redirect_url}' \
   --data-urlencode "username=NoSuchUser$(openssl rand -hex 3)" --data-urlencode "password=wrong-password-entirely-aaaa" \
-  http://localhost:8080/login.php)
+  http://localhost:8090/login.php)
 echo "  existing user, wrong password: ${REAL}"
 echo "  user that does not exist:      ${FAKE}"
 [ "$REAL" = "$FAKE" ]
@@ -131,7 +131,7 @@ check "login gives the same answer for a wrong password and an unknown user" $?
 # ask about somebody else's job.
 STATUS=$(curl -s -b "/tmp/${ATK}.jar" \
   --get --data-urlencode "kind=convert" --data-urlencode "target=1" \
-  http://localhost:8080/job_status.php)
+  http://localhost:8090/job_status.php)
 echo "  attacker polling convert/1: ${STATUS}"
 printf '%s' "$STATUS" | grep -q '"state":"none"'
 check "a job poll only ever sees this user's own jobs" $?

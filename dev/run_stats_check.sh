@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 PROBE="StatsProbe$(openssl rand -hex 3)"
 PASS="probe-stats-password-aaaaaaaaaa"
 JAR="/tmp/${PROBE}.cookies"
-BASE="http://localhost:8080"
+BASE="http://localhost:8090"
 fails=0
 
 check() { if [ "$2" = "0" ]; then echo "PASS: $1"; else echo "FAIL: $1"; fails=$((fails+1)); fi; }

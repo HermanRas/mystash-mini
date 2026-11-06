@@ -54,13 +54,13 @@ echo "--- §2.1 Registration ---"
 # "Usernames are letters and digits only" — the rule that also keeps a username
 # safe as a path segment.
 OUT=$(post "/tmp/${PROBE}.r1" -d "username=bad-name&password=${PASS}&confirm_password=${PASS}" \
-  http://localhost:8080/register.php)
+  http://localhost:8090/register.php)
 grep -q 'letters and numbers' "/tmp/${PROBE}.r1"
 check "§2.1 a username with a symbol in it is refused" $?
 
 # "at least 24 characters ... enforced at registration"
 post "/tmp/${PROBE}.r2" -d "username=${PROBE}&password=short23characterspass&confirm_password=short23characterspass" \
-  http://localhost:8080/register.php >/dev/null
+  http://localhost:8090/register.php >/dev/null
 grep -q 'at least 24 characters' "/tmp/${PROBE}.r2"
 check "§2.1 a password under 24 characters is refused" $?
 
@@ -69,7 +69,7 @@ check "§2.1 neither refusal created a stash directory" $?
 
 # The real one. "Registration ... creates App/Data/{user}/videos/{user}.json.enc"
 OUT=$(post /dev/null -d "username=${PROBE}&password=${PASS}&confirm_password=${PASS}" \
-  http://localhost:8080/register.php)
+  http://localhost:8090/register.php)
 echo "  register returned: ${OUT}"
 [ -f "App/Data/${PROBE}/videos/${PROBE}.json.enc" ]
 check "§2.1 registering creates the encrypted index archive" $?
@@ -94,7 +94,7 @@ fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o1")))
 
 # "and must be unused"
 post "/tmp/${PROBE}.r3" -d "username=${PROBE}&password=${PASS}&confirm_password=${PASS}" \
-  http://localhost:8080/register.php >/dev/null
+  http://localhost:8090/register.php >/dev/null
 grep -q 'already taken' "/tmp/${PROBE}.r3"
 check "§2.1 the username cannot be registered twice" $?
 
@@ -103,17 +103,17 @@ echo "--- §2.1 Login ---"
 # Steps 3-4: "App attempts to extract {user}.json.enc using the submitted
 # password. Success = login. Failure = rejected, no further detail given."
 rm -f "$JAR"
-OUT=$(post /dev/null -d "username=${PROBE}&password=wrong-password-entirely-xxx" http://localhost:8080/login.php)
+OUT=$(post /dev/null -d "username=${PROBE}&password=wrong-password-entirely-xxx" http://localhost:8090/login.php)
 case "$OUT" in *login.html*) true;; *) false;; esac
 check "§2.1 the wrong password does not open the stash" $?
 
-OUT=$(post /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8080/login.php)
+OUT=$(post /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8090/login.php)
 case "$OUT" in *wall.php) true;; *) false;; esac
 check "§2.1 the right password opens it" $?
 
 echo "--- §2.3 Upload ---"
 
-post /dev/null -F "video=@${SRC}" http://localhost:8080/upload.php >/dev/null
+post /dev/null -F "video=@${SRC}" http://localhost:8090/upload.php >/dev/null
 
 # §2.3 step 4 + §3: "All generated artifacts are encrypted and written to the
 # datastore" — the four files per video the layout names.
@@ -158,7 +158,7 @@ fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o2")))
 # "Neither is editable ... letting a user type them in would only let them lie
 # about it." Posting them must change nothing.
 post /dev/null -d "id=1&title=Renamed&description=&quality=8K&not_converted=0" \
-  http://localhost:8080/video_save.php >/dev/null
+  http://localhost:8090/video_save.php >/dev/null
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
 $v = ((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"))["videos"] ?? [])[0];
@@ -170,7 +170,7 @@ fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o3")))
 
 echo "--- §2.2 Video wall load ---"
 
-curl -s -b "$JAR" -o "/tmp/${PROBE}.wall" http://localhost:8080/wall.php
+curl -s -b "$JAR" -o "/tmp/${PROBE}.wall" http://localhost:8090/wall.php
 
 # Step 2: "The video file itself is never loaded until the user clicks to play
 # it." The tile links to the watch page and carries the preview clip with
@@ -187,7 +187,7 @@ check "§2.2 the wall never references the video file itself" $?
 # The control for that negative: the string is a real one that does appear
 # where the video genuinely is. Without this the grep above would pass just as
 # well against a typo.
-curl -s -b "$JAR" -o "/tmp/${PROBE}.watch" "http://localhost:8080/video.php?id=1"
+curl -s -b "$JAR" -o "/tmp/${PROBE}.watch" "http://localhost:8090/video.php?id=1"
 grep -q 'type=video' "/tmp/${PROBE}.watch"
 check "§2.2 (control) the watch page does reference it, so the grep above means something" $?
 
@@ -199,7 +199,7 @@ check "§2.2 the watch page holds the video back until play is pressed" $?
 
 echo "--- §2.3 Views ---"
 
-curl -s -b "$JAR" -o /dev/null "http://localhost:8080/video.php?id=1"
+curl -s -b "$JAR" -o /dev/null "http://localhost:8090/video.php?id=1"
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
 $v = ((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"))["videos"] ?? [])[0];
@@ -209,7 +209,7 @@ printf("%s: §2.3 opening the watch page does not count a view (%d)\n",
 fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o4")))
 
 # The player posts this from its "playing" event.
-curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8080/video_view.php
+curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8090/video_view.php
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
 $u = getenv("U"); $p = getenv("P");
@@ -227,15 +227,15 @@ fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o5")))
 
 echo "--- §2.7 Categories ---"
 
-curl -s -b "$JAR" -o /dev/null -d "name=Highlights&color=%23ffa31a" http://localhost:8080/category_save.php
+curl -s -b "$JAR" -o /dev/null -d "name=Highlights&color=%23ffa31a" http://localhost:8090/category_save.php
 
 # "The same category may be assigned multiple times at different timestamps."
-curl -s -b "$JAR" -o /dev/null -d "id=1&name=Highlights&timestamp=00:00:10" http://localhost:8080/video_category_add.php
-curl -s -b "$JAR" -o /dev/null -d "id=1&name=Highlights&timestamp=00:00:30" http://localhost:8080/video_category_add.php
+curl -s -b "$JAR" -o /dev/null -d "id=1&name=Highlights&timestamp=00:00:10" http://localhost:8090/video_category_add.php
+curl -s -b "$JAR" -o /dev/null -d "id=1&name=Highlights&timestamp=00:00:30" http://localhost:8090/video_category_add.php
 # "Only the exact same category at the exact same timestamp is rejected."
-curl -s -b "$JAR" -o /dev/null -d "id=1&name=Highlights&timestamp=00:00:30" http://localhost:8080/video_category_add.php
+curl -s -b "$JAR" -o /dev/null -d "id=1&name=Highlights&timestamp=00:00:30" http://localhost:8090/video_category_add.php
 # "categories can't be invented ad hoc per video"
-curl -s -b "$JAR" -o /dev/null -d "id=1&name=NotAGlobalCategory&timestamp=00:00:05" http://localhost:8080/video_category_add.php
+curl -s -b "$JAR" -o /dev/null -d "id=1&name=NotAGlobalCategory&timestamp=00:00:05" http://localhost:8090/video_category_add.php
 
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/VideoCategories.php";
@@ -254,7 +254,7 @@ fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o6")))
 
 # "Removing a global category only retires the definition ... videos already
 # tagged with it keep their tags."
-curl -s -b "$JAR" -o /dev/null -d "name=Highlights" http://localhost:8080/category_delete.php
+curl -s -b "$JAR" -o /dev/null -d "name=Highlights" http://localhost:8090/category_delete.php
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
 require_once "/app/src/VideoCategories.php";
@@ -271,7 +271,7 @@ fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o7")))
 # The wall filter list comes from the global definitions, so a retired one
 # leaves it. (Grepped inside the filter panel, not the whole page: the video
 # still wears the tag in its tile stats, which is the point of the check above.)
-curl -s -b "$JAR" -o "/tmp/${PROBE}.wall2" http://localhost:8080/wall.php
+curl -s -b "$JAR" -o "/tmp/${PROBE}.wall2" http://localhost:8090/wall.php
 ! grep -q 'name="category\[\]" value="Highlights"' "/tmp/${PROBE}.wall2"
 check "§2.7 a retired category disappears from the wall's filter panel" $?
 

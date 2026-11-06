@@ -35,15 +35,15 @@ $navActive = $navActive ?? '';
 $headerActions = $headerActions ?? '';
 $searchTerm = $searchTerm ?? '';
 $searchAction = $searchAction ?? 'wall.php';
-$searchPlaceholder = $searchPlaceholder ?? 'Search videos, creators, categories…';
+$searchPlaceholder = $searchPlaceholder ?? 'Search titles and categories…';
 $searchClearHref = $searchClearHref ?? $searchAction;
 // Extra state the search must not throw away (the Creators screen's sort).
 $searchHidden = $searchHidden ?? [];
 
 // Icons are sliced from the generated sheet in Docs/Assets/site_icons.png.
 $navPills = [
-    'videos' => ['All Videos', 'wall.php', 'videos'],
-    'creators' => ['Creators', 'creator.php', 'creator'],
+    // MyStashMini: no Creators screen — everything is credited to `default`.
+    'videos' => ['All', 'wall.php', 'videos'],
     'categories' => ['Categories', 'category.php', 'tag'],
 ];
 ?>
@@ -55,7 +55,7 @@ $navPills = [
   <div class="header-left">
     <a class="brand" href="wall.php">
       <img src="assets/img/mark.png" alt="MyStash">
-      <span class="brand-name">MyStash</span>
+      <span class="brand-name">MyStash Mini</span>
     </a>
 
   <?php /* The nav lives in the header rather than on a row of its own: a
@@ -99,7 +99,6 @@ $navPills = [
         <?= htmlspecialchars(Session::user(), ENT_QUOTES) ?>
       </div>
       <div class="user-menu-dropdown">
-        <a href="creator.php"><img class="menu-icon" src="assets/img/icons/creator.png" alt="">Manage Creators</a>
         <?php /* Playlists live here and not in the pill bar: §4.2 fixes that
                  bar at exactly three destinations, and a fourth would make it
                  the place category names were kept out of for the same

@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 SRC="${1:-${MYSTASH_SAMPLE_DIR:-dev/sample}}"
 USER_NAME="${2:-TestUser}"
 PASSWORD="${3:-DS89HONPtufGDncNUoGfshCg}"
-BASE="http://localhost:8080"
+BASE="http://localhost:8090"
 JAR="$(mktemp -d)/cookies"
 
 [ -d "$SRC/clips" ] || { echo "no clips at $SRC/clips — run dev/make_sample_clips.sh first"; exit 1; }

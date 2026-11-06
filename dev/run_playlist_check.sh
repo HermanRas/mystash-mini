@@ -56,18 +56,18 @@ $store->saveIndex($u, $p, $index);
 echo "seeded ", count($index["videos"]), " videos\n";
 ' || { echo "FAIL: could not build the throwaway stash"; fails=1; exit 1; }
 
-curl -s -c "$JAR" -o /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8080/login.php
+curl -s -c "$JAR" -o /dev/null -d "username=${PROBE}&password=${PASS}" http://localhost:8090/login.php
 
 echo "--- creating ---"
 
-post /dev/null -d "name=Watch+Later" http://localhost:8080/playlist_save.php >/dev/null
+post /dev/null -d "name=Watch+Later" http://localhost:8090/playlist_save.php >/dev/null
 [ "$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo count(MyStash\Playlists::all((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"))));')" = "1" ]
 check "creating a playlist stores it in the encrypted index" $?
 
 # A blank name must not produce a nameless playlist.
-post /dev/null -d "name=" http://localhost:8080/playlist_save.php >/dev/null
-post /dev/null -d "name=+++" http://localhost:8080/playlist_save.php >/dev/null
+post /dev/null -d "name=" http://localhost:8090/playlist_save.php >/dev/null
+post /dev/null -d "name=+++" http://localhost:8090/playlist_save.php >/dev/null
 [ "$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo count(MyStash\Playlists::all((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"))));')" = "1" ]
 check "a blank or whitespace name creates nothing" $?
@@ -75,7 +75,7 @@ check "a blank or whitespace name creates nothing" $?
 # --- adding videos, the way the modal posts -------------------------------
 echo "--- contents and order ---"
 
-post /dev/null -d "id=1&videos[]=3&videos[]=1&videos[]=2" http://localhost:8080/playlist_videos.php >/dev/null
+post /dev/null -d "id=1&videos[]=3&videos[]=1&videos[]=2" http://localhost:8090/playlist_videos.php >/dev/null
 ORDER=$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo implode(",", MyStash\Playlists::find((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P")), "1")["videos"]);')
 echo "  stored order: ${ORDER}"
@@ -83,7 +83,7 @@ echo "  stored order: ${ORDER}"
 check "the posted order is the order stored" $?
 
 # A drag posts the whole list in its new order.
-post /dev/null -d "id=1&videos[]=1&videos[]=2&videos[]=3" http://localhost:8080/playlist_videos.php >/dev/null
+post /dev/null -d "id=1&videos[]=1&videos[]=2&videos[]=3" http://localhost:8090/playlist_videos.php >/dev/null
 ORDER=$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo implode(",", MyStash\Playlists::find((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P")), "1")["videos"]);')
 echo "  after a reorder: ${ORDER}"
@@ -91,21 +91,21 @@ echo "  after a reorder: ${ORDER}"
 check "a reorder rewrites the stored order" $?
 
 # An id this stash does not hold must not end up on a list.
-post /dev/null -d "id=1&videos[]=1&videos[]=999&videos[]=2" http://localhost:8080/playlist_videos.php >/dev/null
+post /dev/null -d "id=1&videos[]=1&videos[]=999&videos[]=2" http://localhost:8090/playlist_videos.php >/dev/null
 ORDER=$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo implode(",", MyStash\Playlists::find((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P")), "1")["videos"]);')
 [ "$ORDER" = "1,2" ]
 check "an id the stash does not hold is refused at the endpoint (${ORDER})" $?
 
 # A playlist that does not exist must not be created by posting to it.
-post /dev/null -d "id=77&videos[]=1" http://localhost:8080/playlist_videos.php >/dev/null
+post /dev/null -d "id=77&videos[]=1" http://localhost:8090/playlist_videos.php >/dev/null
 [ "$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo count(MyStash\Playlists::all((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"))));')" = "1" ]
 check "posting to a playlist id that does not exist creates nothing" $?
 
 echo "--- the watch page's checkbox ---"
 
-BODY=$(curl -s -b "$JAR" -H 'X-Requested-With: fetch' -d "playlist=1&video=4" http://localhost:8080/playlist_toggle.php)
+BODY=$(curl -s -b "$JAR" -H 'X-Requested-With: fetch' -d "playlist=1&video=4" http://localhost:8090/playlist_toggle.php)
 echo "  toggle on:  ${BODY}"
 printf '%s' "$BODY" | grep -q '"in_playlist":true'
 check "ticking the box adds the video and says so" $?
@@ -115,26 +115,26 @@ echo implode(",", MyStash\Playlists::find((new MyStash\Datastore())->loadIndex(g
 [ "$ORDER" = "1,2,4" ]
 check "...appended, so the order the user arranged is left alone (${ORDER})" $?
 
-BODY=$(curl -s -b "$JAR" -H 'X-Requested-With: fetch' -d "playlist=1&video=4" http://localhost:8080/playlist_toggle.php)
+BODY=$(curl -s -b "$JAR" -H 'X-Requested-With: fetch' -d "playlist=1&video=4" http://localhost:8090/playlist_toggle.php)
 echo "  toggle off: ${BODY}"
 printf '%s' "$BODY" | grep -q '"in_playlist":false'
 check "ticking it again removes the video" $?
 
-CODE=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -d "playlist=1&video=999" http://localhost:8080/playlist_toggle.php)
+CODE=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -d "playlist=1&video=999" http://localhost:8090/playlist_toggle.php)
 [ "$CODE" = "404" ]
 check "toggling a video the stash does not hold is refused (${CODE})" $?
 
 # --- the pages render what is stored --------------------------------------
 echo "--- the screens ---"
 
-curl -s -b "$JAR" -o "/tmp/${PROBE}.grid" http://localhost:8080/playlist.php
+curl -s -b "$JAR" -o "/tmp/${PROBE}.grid" http://localhost:8090/playlist.php
 grep -q 'Watch Later' "/tmp/${PROBE}.grid"
 check "the playlists screen shows the playlist" $?
 
 # §"the first 3 videos in a card": the card must stop at CARD_PREVIEW_COUNT
 # however many the list holds.
-post /dev/null -d "id=1&videos[]=1&videos[]=2&videos[]=3&videos[]=4" http://localhost:8080/playlist_videos.php >/dev/null
-curl -s -b "$JAR" -o "/tmp/${PROBE}.grid" http://localhost:8080/playlist.php
+post /dev/null -d "id=1&videos[]=1&videos[]=2&videos[]=3&videos[]=4" http://localhost:8090/playlist_videos.php >/dev/null
+curl -s -b "$JAR" -o "/tmp/${PROBE}.grid" http://localhost:8090/playlist.php
 THUMBS=$(grep -c 'playlist-thumb"' "/tmp/${PROBE}.grid")
 echo "  thumbnails on the card for a 4-video playlist: ${THUMBS}"
 [ "$THUMBS" = "3" ]
@@ -143,7 +143,7 @@ check "a card shows the first three videos and stops" $?
 grep -q '4 videos' "/tmp/${PROBE}.grid"
 check "...while the card still reports the true count" $?
 
-curl -s -b "$JAR" -o "/tmp/${PROBE}.edit" "http://localhost:8080/playlist.php?id=1"
+curl -s -b "$JAR" -o "/tmp/${PROBE}.edit" "http://localhost:8090/playlist.php?id=1"
 ROWS=$(grep -c 'class="playlist-row"' "/tmp/${PROBE}.edit")
 [ "$ROWS" = "4" ]
 check "the edit screen lists every video on the playlist (${ROWS})" $?
@@ -158,14 +158,14 @@ DISABLED=$(grep -c 'checked disabled' "/tmp/${PROBE}.edit")
 check "the add-videos modal shows videos already on the list as ticked (${DISABLED})" $?
 
 # A bookmark to a deleted playlist must not open an edit screen for nothing.
-LOC=$(curl -s -b "$JAR" -o /dev/null -w '%{redirect_url}' "http://localhost:8080/playlist.php?id=404")
+LOC=$(curl -s -b "$JAR" -o /dev/null -w '%{redirect_url}' "http://localhost:8090/playlist.php?id=404")
 case "$LOC" in *playlist.php) true;; *) false;; esac
 check "a playlist id that does not exist redirects to the grid" $?
 
 echo "--- deleting ---"
 
 # Deleting a video has to leave the playlists consistent.
-curl -s -b "$JAR" -o /dev/null -d "id=2" http://localhost:8080/video_delete.php
+curl -s -b "$JAR" -o /dev/null -d "id=2" http://localhost:8090/video_delete.php
 ORDER=$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo implode(",", MyStash\Playlists::find((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P")), "1")["videos"]);')
 echo "  playlist after deleting video 2: ${ORDER}"
@@ -173,7 +173,7 @@ echo "  playlist after deleting video 2: ${ORDER}"
 check "deleting a video drops it from the playlists that held it" $?
 
 # ...and deleting a playlist must not take the videos with it.
-curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8080/playlist_delete.php
+curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8090/playlist_delete.php
 COUNT=$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 $i = (new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"));
 echo count(MyStash\Playlists::all($i)), ":", count($i["videos"]);')
@@ -182,7 +182,7 @@ echo "  playlists:videos after deleting the playlist: ${COUNT}"
 check "deleting a playlist removes the list and leaves every video alone" $?
 
 # Ids appear in URLs, so the id of a deleted playlist must not be reissued.
-post /dev/null -d "name=Second" http://localhost:8080/playlist_save.php >/dev/null
+post /dev/null -d "name=Second" http://localhost:8090/playlist_save.php >/dev/null
 NEWID=$(peek 'require_once "/app/src/Datastore.php"; require_once "/app/src/Playlists.php";
 echo MyStash\Playlists::all((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P")))[0]["id"];')
 echo "  id issued after deleting playlist 1: ${NEWID}"
