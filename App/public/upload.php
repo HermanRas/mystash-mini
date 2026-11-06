@@ -102,6 +102,8 @@ foreach ($files as $file) {
     // Re-read before every file: another tab may have written in between.
     $index = Session::refreshIndex();
     $isPicture = PictureIngest::detect($file['tmp_name']) !== null;
+    // Read now: ingestion moves the temp file away, success or not.
+    $mime = (string) (new \finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
 
     // Ingestion throws when it cannot make a wall tile out of the file; the
     // message it wrote says why, which "upload failed" would not.
@@ -110,7 +112,13 @@ foreach ($files as $file) {
             ? (new PictureIngest())->ingest(Session::user(), Session::password(), $file['tmp_name'], $name, $index)
             : (new VideoIngest())->ingest(Session::user(), Session::password(), $file['tmp_name'], $name, $index, $previewAt);
     } catch (\RuntimeException $e) {
-        $errors[] = "{$name}: {$e->getMessage()}";
+        // A file that is neither a picture we know nor a video ffmpeg can read
+        // is usually not media at all — a failed download saved as .jpg is
+        // really an HTML or JSON error page. Say what it actually is rather
+        // than blaming a "video" the user never uploaded.
+        $errors[] = !$isPicture && !str_starts_with($mime, 'video/')
+            ? "{$name}: not a picture or video (the file contains {$mime}) — probably a failed download."
+            : "{$name}: {$e->getMessage()}";
         continue;
     }
 
