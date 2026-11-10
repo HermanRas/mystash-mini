@@ -2,14 +2,17 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../src/Crypto7z.php';
-require __DIR__ . '/../src/VideoEncoder.php';
-require __DIR__ . '/../src/VideoQuality.php';
-require __DIR__ . '/../src/User.php';
-require __DIR__ . '/../src/VideoQuery.php';
-require __DIR__ . '/../src/CreatorQuery.php';
-require __DIR__ . '/../src/Rekey.php';
-require __DIR__ . '/../src/Jobs.php';
+require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
+require_once __DIR__ . '/../src/StashKey.php';
+require_once __DIR__ . '/../src/MigrateV2.php';
+require_once __DIR__ . '/../src/VideoEncoder.php';
+require_once __DIR__ . '/../src/VideoQuality.php';
+require_once __DIR__ . '/../src/User.php';
+require_once __DIR__ . '/../src/VideoQuery.php';
+require_once __DIR__ . '/../src/CreatorQuery.php';
+require_once __DIR__ . '/../src/Rekey.php';
+require_once __DIR__ . '/../src/Jobs.php';
 require_once __DIR__ . '/../src/LoginThrottle.php';
 require_once __DIR__ . '/../src/VideoIngest.php';
 require_once __DIR__ . '/../src/VideoPreview.php';
@@ -22,6 +25,9 @@ use MyStash\CreatorQuery;
 use MyStash\Datastore;
 use MyStash\Rekey;
 use MyStash\Crypto7z;
+use MyStash\MigrateV2;
+use MyStash\StashCrypto;
+use MyStash\StashKey;
 use MyStash\Jobs;
 use MyStash\User;
 use MyStash\VideoEncoder;
@@ -71,45 +77,116 @@ if (!file_exists($fixture)) {
 $workDir = sys_get_temp_dir() . '/mystash_smoke_' . uniqid();
 mkdir($workDir, 0700, true);
 
-$archive = $workDir . '/1.mp4.7z';
+$archive = $workDir . '/1.mp4.epc';
 $extractDir = $workDir . '/extracted';
 $password = 'smoke-test-password-' . bin2hex(random_bytes(4));
 
-$crypto = new Crypto7z();
+// --- StashKey: Argon2id, salted, carried as a token (Docs/v2_migration.md) ---
+$key = StashKey::create($password);
+$parsedKey = StashKey::parse($key);
+step('a new key parses back into cost, salt and a 32-byte key',
+    $parsedKey !== null && strlen($parsedKey['key']) === 32 && strlen($parsedKey['salt']) === 16
+    && $parsedKey['ops'] === StashKey::OPSLIMIT && $parsedKey['mem'] === StashKey::MEMLIMIT);
+step('the token does not contain the password', !str_contains($key, $password));
+step('the same password matches its key', StashKey::matches($key, $password));
+step('a different password does not', !StashKey::matches($key, $password . 'x'));
+$sameAgain = StashKey::create($password);
+step('the same password twice gives two different keys (fresh salt each time)',
+    StashKey::parse($sameAgain)['key'] !== $parsedKey['key']);
+step('a token that is not one is refused', StashKey::parse('not-a-token') === null);
 
-step('encrypt fixture into .7z archive', $crypto->encrypt($fixture, $archive, $password));
+$crypto = new StashCrypto();
+
+step('encrypt fixture into an .epc archive', $crypto->encrypt($fixture, $archive, $key));
 step('archive file exists', file_exists($archive));
+
+$header = StashCrypto::readHeader($archive);
+step('the archive header records the salt and cost the key was made with',
+    $header !== null && $header['salt'] === $parsedKey['salt']
+    && $header['ops'] === $parsedKey['ops'] && $header['mem'] === $parsedKey['mem']);
+step('the header re-derives the same key from the password (what decode.php does)',
+    $header !== null && StashKey::forHeader($header, $password) === $key);
+step('the original file name is not visible in the archive (it is encrypted)',
+    !str_contains((string) file_get_contents($archive), basename($fixture)));
 
 $wrongPasswordExtractDir = $workDir . '/wrong';
 step(
-    'extraction fails with wrong password',
-    $crypto->extract($archive, $wrongPasswordExtractDir, 'not-the-right-password') === false,
+    'extraction fails with a key from the wrong password (same salt)',
+    $crypto->extract($archive, $wrongPasswordExtractDir, StashKey::forHeader($header, 'not-the-right-password')) === false,
+);
+step('...and leaves no partial plaintext behind', glob("{$wrongPasswordExtractDir}/*") === []);
+step(
+    'extraction fails with the right password under a different salt',
+    $crypto->extract($archive, $wrongPasswordExtractDir, $sameAgain) === false,
 );
 
-step('extract archive with correct password', $crypto->extract($archive, $extractDir, $password));
+step('extract archive with correct key', $crypto->extract($archive, $extractDir, $key));
 
 $extractedFile = $extractDir . '/' . basename($fixture);
-step('extracted file exists', file_exists($extractedFile));
+step('extracted file exists, under its original name', file_exists($extractedFile));
 step(
     'extracted file matches original (byte-for-byte)',
     file_exists($extractedFile) && hash_file('sha256', $fixture) === hash_file('sha256', $extractedFile),
 );
 
-// Crypto7z::replace() — the one that must never lose the file it is replacing
-// (Docs/PLAN.md 4.29). encrypt() deletes its destination before writing the
-// replacement; these check that replace() never leaves that hole.
-$live = $workDir . '/live.7z';
+// --- tampering: every way of changing an archive must be refused ---
+$tamper = static function (string $label, callable $mutate) use ($archive, $crypto, $key, $workDir): void {
+    $copy = $workDir . '/tampered.epc';
+    copy($archive, $copy);
+    $bytes = (string) file_get_contents($copy);
+    file_put_contents($copy, $mutate($bytes));
+    $out = $workDir . '/tampered-out';
+    $opened = $crypto->extract($copy, $out, $key);
+    step("a tampered archive is refused: {$label}", $opened === false);
+    step('...and leaves no partial plaintext behind', glob("{$out}/*") === []);
+    @unlink($copy);
+};
+$tamper('one byte flipped in the middle of the video', static function (string $b): string {
+    $at = intdiv(strlen($b), 2);
+    $b[$at] = chr(ord($b[$at]) ^ 0x01);
+
+    return $b;
+});
+$tamper('one byte flipped in the encrypted file name', static function (string $b): string {
+    $b[66] = chr(ord($b[66]) ^ 0x01);
+
+    return $b;
+});
+$tamper('the last chunk cut off (truncated)', static fn(string $b): string => substr($b, 0, strlen($b) - 100));
+$tamper('bytes appended after the end', static fn(string $b): string => $b . 'extra');
+$tamper('the Argon2id cost edited in the header', static function (string $b): string {
+    $b[10] = chr(ord($b[10]) ^ 0x02);
+
+    return $b;
+});
+$tamper('not an .epc at all', static fn(string $b): string => 'PK' . substr($b, 2));
+
+// Sizes at the edges of the 1 MiB chunking.
+foreach (['empty' => 0, 'one byte' => 1, 'exactly 1 MiB' => 1048576, '1 MiB + 1' => 1048577, '3 MiB' => 3145728] as $label => $size) {
+    $plain = $workDir . '/edge.bin';
+    file_put_contents($plain, $size > 0 ? random_bytes($size) : '');
+    $edgeArchive = $workDir . '/edge.epc';
+    $edgeOut = $workDir . '/edge-out';
+    $ok = $crypto->encrypt($plain, $edgeArchive, $key) && $crypto->extract($edgeArchive, $edgeOut, $key);
+    step("round-trips a file of {$label}", $ok && hash_file('sha256', "{$edgeOut}/edge.bin") === hash_file('sha256', $plain));
+    @unlink("{$edgeOut}/edge.bin");
+}
+
+// StashCrypto::replace() — the one that must never lose the file it is
+// replacing (Docs/PLAN.md 4.29). encrypt() deletes its destination before
+// writing the replacement; these check that replace() never leaves that hole.
+$live = $workDir . '/live.epc';
 $other = $workDir . '/other.txt';
 file_put_contents($other, 'the replacement contents');
 
 step('replace() creates an archive that did not exist yet',
-    $crypto->replace($fixture, $live, $password) && file_exists($live));
+    $crypto->replace($fixture, $live, $key) && file_exists($live));
 
 step('replace() swaps in the new contents',
-    $crypto->replace($other, $live, $password));
+    $crypto->replace($other, $live, $key));
 
 $swapped = $workDir . '/swapped';
-$crypto->extract($live, $swapped, $password);
+$crypto->extract($live, $swapped, $key);
 step('the swapped archive holds the new file, not the old one',
     file_exists("{$swapped}/other.txt") && !file_exists("{$swapped}/1.mp4"));
 
@@ -122,16 +199,16 @@ step('a successful replace leaves no .new or .old litter',
 $before = hash_file('sha256', $live);
 
 step('replace() refuses a source that is not a file',
-    $crypto->replace($workDir . '/no-such-file', $live, $password) === false);
+    $crypto->replace($workDir . '/no-such-file', $live, $key) === false);
 step('...and the original archive is untouched',
     hash_file('sha256', $live) === $before);
 
 // The failure that actually loses videos: the encrypt itself fails after the
-// destination has been cleared. A 7z that always exits non-zero reproduces it
-// without having to fill a disk.
-$failing = new Crypto7z('/bin/false');
+// destination has been cleared. A key that is not a key reproduces it without
+// having to fill a disk.
+$brokenKey = 'epck1.not-a-real-key';
 step('replace() reports a failed encrypt instead of ignoring it',
-    $failing->replace($other, $live, $password) === false);
+    $crypto->replace($other, $live, $brokenKey) === false);
 step('...and the original archive is still there, byte for byte',
     file_exists($live) && hash_file('sha256', $live) === $before);
 
@@ -139,13 +216,13 @@ step('a failed replace leaves no .new or .old litter',
     $litter($live) === [] && !file_exists("{$live}.old"));
 
 step('the original still opens after the failures',
-    $crypto->extract($live, $workDir . '/still', $password));
+    $crypto->extract($live, $workDir . '/still', $key));
 
 // encrypt() is the unsafe one by design — this is what replace() exists to
 // avoid, and stating it here keeps the difference from being forgotten.
-$doomed = $workDir . '/doomed.7z';
-$crypto->encrypt($other, $doomed, $password);
-$failing->encrypt($other, $doomed, $password);
+$doomed = $workDir . '/doomed.epc';
+$crypto->encrypt($other, $doomed, $key);
+$crypto->encrypt($other, $doomed, $brokenKey);
 step('encrypt() destroys its destination when it fails (hence replace())',
     !file_exists($doomed));
 
@@ -528,11 +605,14 @@ step('an array gender is ignored rather than filtered for "Array"',
 // Password change / re-keying (Docs/PLAN.md 6.1). Runs against a throwaway
 // stash of its own — never the caller's — and removes it again at the end.
 $probe = 'RekeyProbe' . bin2hex(random_bytes(3));
-$oldKey = 'probe-old-password-aaaaaaaa';
-$newKey = 'probe-new-password-bbbbbbbb';
+$oldPassword = 'probe-old-password-aaaaaaaa';
+$newPassword = 'probe-new-password-bbbbbbbb';
 
 $users = new User();
-step("create a throwaway stash ({$probe})", $users->create($probe, $oldKey));
+$oldKey = $users->create($probe, $oldPassword);
+step("create a throwaway stash ({$probe})", $oldKey !== null);
+step('...and its index opens with the key derived from the password again',
+    StashKey::unlock($probe, $oldPassword) === $oldKey);
 
 $store = new Datastore();
 $store->saveVideoMetadata($probe, $oldKey, '1', ['id' => '1', 'title' => 'Probe clip']);
@@ -545,22 +625,27 @@ step(
 );
 step(
     'reusing the current password is refused',
-    $rekey->run($probe, $oldKey, $oldKey)['ok'] === false,
+    $rekey->run($probe, $oldKey, $oldPassword)['ok'] === false,
 );
 step(
-    'a wrong current password is refused',
-    $rekey->run($probe, 'not-the-current-password-x', $newKey)['ok'] === false,
+    'a key from a wrong current password is refused',
+    $rekey->run($probe, StashKey::create('not-the-current-password-x'), $newPassword)['ok'] === false,
 );
 step(
     'the stash still opens with the old password after those refusals',
     $store->loadIndex($probe, $oldKey) !== null,
 );
 
-$result = $rekey->run($probe, $oldKey, $newKey);
+$result = $rekey->run($probe, $oldKey, $newPassword);
 step("re-key succeeds ({$result['message']})", $result['ok']);
 step('it rewrote more than just the index', $result['rewritten'] >= 2);
 
-step('the stash opens with the new password', $store->loadIndex($probe, $newKey) !== null);
+$newKey = StashKey::unlock($probe, $newPassword);
+step('the stash opens with the new password', $newKey !== null && $store->loadIndex($probe, $newKey) !== null);
+step('the re-key gave the stash a fresh salt',
+    StashKey::parse($newKey)['salt'] !== StashKey::parse($oldKey)['salt']);
+step('the old password no longer derives a key that opens it',
+    $store->loadIndex($probe, (string) StashKey::unlock($probe, $oldPassword)) === null);
 step('the stash no longer opens with the old one', $store->loadIndex($probe, $oldKey) === null);
 step(
     'per-video metadata came across too, not just the index',
@@ -572,12 +657,12 @@ $walk = new RecursiveIteratorIterator(
     new RecursiveDirectoryIterator(Datastore::userDir($probe), FilesystemIterator::SKIP_DOTS),
 );
 foreach ($walk as $file) {
-    if ($file->isFile() && str_ends_with($file->getPathname(), '.enc.old')) {
+    if ($file->isFile() && str_ends_with($file->getPathname(), '.epc.old')) {
         $leftovers[] = $file->getFilename();
     }
 }
 step(
-    'no .enc.old safety copies are left behind (' . (implode(', ', $leftovers) ?: 'none') . ')',
+    'no .epc.old safety copies are left behind (' . (implode(', ', $leftovers) ?: 'none') . ')',
     $leftovers === [],
 );
 
@@ -721,7 +806,7 @@ echo PHP_EOL . "-- deleting a stash --" . PHP_EOL;
 
 $users = new User();
 $doomed = 'DelProbe' . bin2hex(random_bytes(3));
-$doomedKey = 'delete-probe-password-aaaaaaaa';
+$doomedPassword = 'delete-probe-password-aaaaaaaa';
 
 // The stash the traversal below tries to reach past the data directory and
 // delete. It is created here rather than being assumed to exist: this check
@@ -730,11 +815,12 @@ $doomedKey = 'delete-probe-password-aaaaaaaa';
 // that stash happened to be missing, because a directory that was never there
 // cannot be observed to survive.
 $bystander = 'DelBystander' . bin2hex(random_bytes(3));
-step("create a bystander stash ({$bystander})", $users->create($bystander, $doomedKey));
+step("create a bystander stash ({$bystander})", $users->create($bystander, $doomedPassword) !== null);
 
-step("create a throwaway stash ({$doomed})", $users->create($doomed, $doomedKey));
+step("create a throwaway stash ({$doomed})", $users->create($doomed, $doomedPassword) !== null);
 
-$openable = static fn(): bool => (new Datastore())->loadIndex($doomed, $doomedKey) !== null;
+$openable = static fn(): bool => ($k = StashKey::unlock($doomed, $doomedPassword)) !== null
+    && (new Datastore())->loadIndex($doomed, $k) !== null;
 step('...and it opens', $openable());
 
 $wrong = $users->delete($doomed, 'this-is-not-the-password-aaaa');
@@ -747,20 +833,20 @@ step('...and the stash is still there, still opening', $openable());
 // from the session in practice, but a traversal must not be able to reach
 // past the data directory even if it ever did not.
 foreach (["../{$bystander}", 'Del/Probe', '..', '', 'Has Space'] as $bad) {
-    $refused = $users->delete($bad, $doomedKey);
+    $refused = $users->delete($bad, $doomedPassword);
     step("a name that is not letters-and-digits is refused (" . var_export($bad, true) . ")",
         $refused['ok'] === false);
 }
 step("{$bystander} survived every one of those",
     is_dir(Datastore::userDir($bystander)));
 
-$gone = $users->delete($doomed, $doomedKey);
+$gone = $users->delete($doomed, $doomedPassword);
 step('the right password deletes it (' . $gone['message'] . ')', $gone['ok'] === true);
 step('the directory is actually gone', !is_dir(Datastore::userDir($doomed)));
 step('...and it no longer opens', !$openable());
 step('deleting it twice is refused rather than pretending',
-    $users->delete($doomed, $doomedKey)['ok'] === false);
-step('the name is free to use again', $users->create($doomed, $doomedKey));
+    $users->delete($doomed, $doomedPassword)['ok'] === false);
+step('the name is free to use again', $users->create($doomed, $doomedPassword) !== null);
 
 Datastore::wipe(Datastore::userDir($doomed));
 Datastore::wipe(Datastore::userDir($bystander));
@@ -778,10 +864,10 @@ step('cleaned up', !is_dir(Datastore::userDir($doomed))
 echo PHP_EOL . "-- changing a video's preview --" . PHP_EOL;
 
 $previewUser = 'PrevProbe' . bin2hex(random_bytes(3));
-$previewKey = 'preview-probe-password-aaaaaaaa';
 $users = new User();
+$previewKey = $users->create($previewUser, 'preview-probe-password-aaaaaaaa');
 
-step("create a throwaway stash ({$previewUser})", $users->create($previewUser, $previewKey));
+step("create a throwaway stash ({$previewUser})", $previewKey !== null);
 
 $store = new Datastore();
 $previewIndex = $store->loadIndex($previewUser, $previewKey);
@@ -792,14 +878,14 @@ $previewIndex['videos'][] = $ingested;
 $store->saveIndex($previewUser, $previewKey, $previewIndex);
 
 $videoId = (string) $ingested['id'];
-$previewArchive = Datastore::videoDir($previewUser, $videoId) . "/{$videoId}.jpg.preview.enc";
+$previewArchive = Datastore::videoDir($previewUser, $videoId) . "/{$videoId}.jpg.preview.epc";
 
 step('the upload produced a preview archive', is_file($previewArchive));
 
 // The hover clip is a background job now (upload.php starts it), so ingestion
 // must *not* make one — that is the work that held the upload request open
 // past the proxy's timeout. The job's body is VideoPreview::buildClip().
-$clipArchive = Datastore::videoDir($previewUser, $videoId) . "/{$videoId}.mp4.preview.enc";
+$clipArchive = Datastore::videoDir($previewUser, $videoId) . "/{$videoId}.mp4.preview.epc";
 step('ingestion leaves the hover clip to the background job', !is_file($clipArchive));
 
 $clip = (new VideoPreview())->buildClip($previewUser, $previewKey, $videoId);
@@ -807,7 +893,7 @@ step('the preview job builds the hover clip (' . $clip['message'] . ')', $clip['
 
 $clipOut = Datastore::tmpfsWorkDir('smokeclip');
 step('...and it decrypts to a playable clip',
-    (new Crypto7z())->extract($clipArchive, $clipOut, $previewKey)
+    (new StashCrypto())->extract($clipArchive, $clipOut, $previewKey)
     && ((new VideoEncoder())->durationSeconds(glob("{$clipOut}/*")[0] ?? '') ?? 0) > 0);
 Datastore::wipe($clipOut);
 
@@ -836,7 +922,7 @@ step('...and the metadata records where it came from',
 // size — replace() verifies its own work, but this proves it end to end.
 $previewOut = Datastore::tmpfsWorkDir('smokeprev');
 step('the new preview archive still decrypts',
-    (new Crypto7z())->extract($previewArchive, $previewOut, $previewKey));
+    (new StashCrypto())->extract($previewArchive, $previewOut, $previewKey));
 $extractedPreview = glob("{$previewOut}/*")[0] ?? null;
 step('...to something that is really an image',
     $extractedPreview !== null && @getimagesize($extractedPreview) !== false);
@@ -861,9 +947,9 @@ step('...and it really is a PNG', (@getimagesize($ownPicture)[2] ?? 0) === IMAGE
     step('...and the stored preview changed again', $archiveHash() !== $afterTimestamp);
 
     // A PNG went in; a JPEG must come out, because the archive is named
-    // .jpg.preview.enc and media.php serves it as image/jpeg.
+    // .jpg.preview.epc and media.php serves it as image/jpeg.
     $suppliedOut = Datastore::tmpfsWorkDir('smokeprev');
-    (new Crypto7z())->extract($previewArchive, $suppliedOut, $previewKey);
+    (new StashCrypto())->extract($previewArchive, $suppliedOut, $previewKey);
     $suppliedFile = glob("{$suppliedOut}/*")[0] ?? null;
     $info = $suppliedFile !== null ? @getimagesize($suppliedFile) : false;
     step('...stored as a JPEG whatever was uploaded (' . ($info[2] ?? 0) . ' = IMAGETYPE_JPEG)',
@@ -898,7 +984,7 @@ $negative = $preview->fromTimestamp($previewUser, $previewKey, $videoId, -5.0);
 step('a negative timestamp is refused', $negative['ok'] === false);
 step('...and the previous preview is still intact', $archiveHash() === $beforeRefusals);
 
-$wrongKey = $preview->fromTimestamp($previewUser, 'not-the-password-aaaaaaaaaaaa', $videoId, 1.0);
+$wrongKey = $preview->fromTimestamp($previewUser, StashKey::create('not-the-password-aaaaaaaaaaaa'), $videoId, 1.0);
 step('a wrong password cannot re-preview', $wrongKey['ok'] === false);
 step('...and the previous preview is still intact', $archiveHash() === $beforeRefusals);
 
@@ -927,7 +1013,7 @@ step('a picture supplied at upload time is used instead of a frame',
 // makes nextVideoId() hand out the same id twice. The second must take the
 // next free one rather than encrypting over the first video's files.
 step('a second upload before the index is saved does not clobber the first',
-    $ownId !== $videoId && is_file(Datastore::videoDir($previewUser, $videoId) . "/{$videoId}.mp4.enc"));
+    $ownId !== $videoId && is_file(Datastore::videoDir($previewUser, $videoId) . "/{$videoId}.mp4.epc"));
 
 // An unreadable one must not fail the whole upload — the video has already
 // been transferred, and losing it over a thumbnail would be a poor trade.
@@ -943,7 +1029,7 @@ $junkMeta = $store->loadVideoMetadata($previewUser, $previewKey, $junkId);
 step('an unreadable supplied picture falls back to the capture time, not a failed upload',
     (int) round((float) $junkMeta['preview_capture_seconds']) === 5);
 step('...and that video still has a preview',
-    is_file(Datastore::videoDir($previewUser, $junkId) . "/{$junkId}.jpg.preview.enc"));
+    is_file(Datastore::videoDir($previewUser, $junkId) . "/{$junkId}.jpg.preview.epc"));
 Datastore::wipe($atUploadDir);
 
 // No litter from replace()'s write-verify-rotate.
@@ -984,8 +1070,8 @@ step('a point after a cut moves back by its length', VideoTrim::mapSeconds(12.0,
 
 // --- the real thing, on a throwaway stash ---
 $trimUser = 'TrimProbe' . bin2hex(random_bytes(3));
-$trimKey = 'trim-probe-password-aaaaaaaaaa';
-step("create a throwaway stash ({$trimUser})", (new User())->create($trimUser, $trimKey));
+$trimKey = (new User())->create($trimUser, 'trim-probe-password-aaaaaaaaaa');
+step("create a throwaway stash ({$trimUser})", $trimKey !== null);
 
 $trimIndex = $store->loadIndex($trimUser, $trimKey);
 $trimEntry = (new VideoIngest())->ingest($trimUser, $trimKey, $fixture, 'trim-probe.mp4', $trimIndex, 12.0);
@@ -1001,14 +1087,14 @@ $trimIndex = $store->loadIndex($trimUser, $trimKey);
     [['name' => 'Probe', 'timestamp_seconds' => 12]], $trimIndex);
 $store->saveIndex($trimUser, $trimKey, $trimIndex);
 
-$videoArchive = Datastore::videoDir($trimUser, $trimId) . "/{$trimId}.mp4.enc";
+$videoArchive = Datastore::videoDir($trimUser, $trimId) . "/{$trimId}.mp4.epc";
 $videoHash = hash_file('sha256', $videoArchive);
 $trimmer = new VideoTrim();
 $encoder = new VideoEncoder();
 
 $trimmedLength = static function () use ($trimUser, $trimKey, $trimId, $encoder): float {
     $out = Datastore::tmpfsWorkDir('smoketrim');
-    (new Crypto7z())->extract(VideoTrim::archivePath($trimUser, $trimId), $out, $trimKey);
+    (new StashCrypto())->extract(VideoTrim::archivePath($trimUser, $trimId), $out, $trimKey);
     $length = $encoder->durationSeconds(glob("{$out}/*")[0] ?? '') ?? 0.0;
     Datastore::wipe($out);
 
@@ -1093,20 +1179,22 @@ echo PHP_EOL . "-- hostile input at the command boundary (7.2) --" . PHP_EOL;
 
 $injUser = 'InjProbe' . bin2hex(random_bytes(3));
 
-// Every shell metacharacter that matters, inside the password — which is
-// passed to 7z as `-p<password>` on every single encrypt and extract.
-$injKey = 'a$(touch /tmp/mystash-pwned-pw)`touch /tmp/mystash-pwned-bt`;|&<>"\' --zz';
+// Every shell metacharacter that matters, inside the password. v1 passed it
+// to 7z as `-p<password>` on every encrypt and extract; v2 never puts it on a
+// command line at all, but the v1 upgrade still hands it to 7z, so it stays.
+$injPassword = 'a$(touch /tmp/mystash-pwned-pw)`touch /tmp/mystash-pwned-bt`;|&<>"\' --zz';
 
 foreach (['/tmp/mystash-pwned-pw', '/tmp/mystash-pwned-bt', '/tmp/mystash-pwned-fn'] as $canary) {
     @unlink($canary);
 }
 
+$injKey = (new User())->create($injUser, $injPassword);
 step("create a stash whose password is nothing but shell metacharacters ({$injUser})",
-    (new User())->create($injUser, $injKey));
+    $injKey !== null);
 
 $injStore = new Datastore();
-step('...and the index reopens with it, so it was stored verbatim',
-    $injStore->loadIndex($injUser, $injKey) !== null);
+step('...and the index reopens with it, so it was derived from verbatim',
+    ($reKey = StashKey::unlock($injUser, $injPassword)) !== null && $injStore->loadIndex($injUser, $reKey) !== null);
 
 // The same treatment for the filename, which comes from the browser.
 $injIndex = $injStore->loadIndex($injUser, $injKey);
@@ -1353,5 +1441,141 @@ step('no options means no filter', VideoStats::filterFor(false, false, 3840, 216
 step('byte counts read as people say them',
     VideoStats::formatBytes(512) === '512 B' && VideoStats::formatBytes(1536) === '1.5 KB'
         && VideoStats::formatBytes(812 * 1024 * 1024) === '812 MB');
+
+// ---------------------------------------------------------------------------
+// The v1 → v2 upgrade (Docs/v2_migration.md)
+//
+// A v1 stash is built by hand with 7z, exactly as v1 wrote one, and upgraded
+// — first directly, then through the background job login.php starts.
+// ---------------------------------------------------------------------------
+
+echo PHP_EOL . "-- upgrading a v1 stash to v2 --" . PHP_EOL;
+
+$legacy = new Crypto7z();
+$v1Password = 'v1-upgrade-probe-password-aaaa';
+
+$makeV1Stash = static function (string $user) use ($legacy, $v1Password, $fixture): array {
+    $index = [
+        'categories' => ['Not Converted' => '#cc4444'],
+        'creators' => ['default' => ['id' => '1', 'name' => 'default']],
+        'videos' => [['id' => '1', 'title' => 'A v1 video']],
+    ];
+    $scratch = Datastore::tmpfsWorkDir('v1probe');
+    $write = static function (string $name, string $contents, string $archive) use ($legacy, $v1Password, $scratch): void {
+        if (!is_dir(dirname($archive))) {
+            mkdir(dirname($archive), 0700, true);
+        }
+        file_put_contents("{$scratch}/{$name}", $contents);
+        $legacy->encrypt("{$scratch}/{$name}", $archive, $v1Password);
+        unlink("{$scratch}/{$name}");
+    };
+    $write("{$user}.json", (string) json_encode($index), Datastore::legacyIndexArchivePath($user));
+    $video = Datastore::userDir($user) . '/videos/Video1';
+    $write('1.json', (string) json_encode(['id' => '1', 'title' => 'A v1 video']), "{$video}/1.json.enc");
+    $write('1.mp4', (string) file_get_contents($fixture), "{$video}/1.mp4.enc");
+    $write('1.json', (string) json_encode(['id' => '1', 'name' => 'default']),
+        Datastore::userDir($user) . '/creators/Creator1/1.json.enc');
+    Datastore::wipe($scratch);
+
+    return $index;
+};
+
+$archivesEndingIn = static function (string $user, string $suffix): array {
+    $found = [];
+    $walk = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(Datastore::userDir($user), FilesystemIterator::SKIP_DOTS),
+    );
+    foreach ($walk as $file) {
+        if ($file->isFile() && str_ends_with($file->getPathname(), $suffix)) {
+            $found[] = $file->getPathname();
+        }
+    }
+    sort($found);
+
+    return $found;
+};
+
+$v1User = 'UpgradeProbe' . bin2hex(random_bytes(3));
+$v1Index = $makeV1Stash($v1User);
+$store = new Datastore();
+$migrate = new MigrateV2();
+
+step('a hand-built v1 stash is recognised as v1', $store->isV1Stash($v1User));
+step('...and has no v2 key to unlock yet', StashKey::unlock($v1User, $v1Password) === null);
+step('the v1 password check refuses a wrong password', !$migrate->opensV1($v1User, 'not-the-v1-password-aaaa'));
+step('...and accepts the right one', $migrate->opensV1($v1User, $v1Password));
+
+$v1Before = array_map('hash_file', array_fill(0, 4, 'sha256'), $archivesEndingIn($v1User, '.enc'));
+
+$refused = $migrate->run($v1User, 'not-the-v1-password-aaaa');
+step('an upgrade with the wrong password is refused (' . $refused['message'] . ')', $refused['ok'] === false);
+step('...and changes nothing', $archivesEndingIn($v1User, '.epc') === []
+    && array_map('hash_file', array_fill(0, 4, 'sha256'), $archivesEndingIn($v1User, '.enc')) === $v1Before);
+
+// A v1 archive that will not open part way through: everything already
+// written must be rolled back, and the v1 stash left exactly as it was.
+$broken = Datastore::userDir($v1User) . '/videos/Video1/1.mp4.enc';
+$brokenBytes = (string) file_get_contents($broken);
+file_put_contents($broken, 'this is not a 7z archive');
+$rolledBack = $migrate->run($v1User, $v1Password);
+step('an upgrade that hits an unreadable archive fails (' . $rolledBack['message'] . ')', $rolledBack['ok'] === false);
+step('...and rolls back every .epc it had written', $archivesEndingIn($v1User, '.epc') === []);
+step('...and the stash is still v1', $store->isV1Stash($v1User));
+file_put_contents($broken, $brokenBytes);
+
+// A stale .epc from an interrupted earlier run must not get in the way.
+file_put_contents(Datastore::userDir($v1User) . '/videos/Video1/1.json.epc', 'half-written by a crash');
+
+$upgraded = $migrate->run($v1User, $v1Password);
+step("the upgrade succeeds ({$upgraded['message']})", $upgraded['ok'] === true && $upgraded['converted'] === 4);
+step('the stash is no longer v1', !$store->isV1Stash($v1User));
+step('no .enc archive is left', $archivesEndingIn($v1User, '.enc') === []);
+step('every archive has an .epc twin', count($archivesEndingIn($v1User, '.epc')) === 4);
+step('no .new or .old litter is left',
+    $archivesEndingIn($v1User, '.old') === [] && glob(Datastore::userDir($v1User) . '/videos/Video1/*.new.*') === []);
+
+$v2Key = StashKey::unlock($v1User, $v1Password);
+step('the same password now unlocks a v2 key', $v2Key !== null);
+step('the index came across intact', $store->loadIndex($v1User, (string) $v2Key) == $v1Index);
+step('the per-video metadata came across',
+    ($store->loadVideoMetadata($v1User, (string) $v2Key, '1')['title'] ?? null) === 'A v1 video');
+step('the creator record came across',
+    ($store->loadCreatorMetadata($v1User, (string) $v2Key, '1')['name'] ?? null) === 'default');
+$videoOut = $workDir . '/upgraded-video';
+step('the video came across byte for byte',
+    (new StashCrypto())->extract(Datastore::userDir($v1User) . '/videos/Video1/1.mp4.epc', $videoOut, (string) $v2Key)
+    && hash_file('sha256', "{$videoOut}/1.mp4") === hash_file('sha256', $fixture));
+
+$again = $migrate->run($v1User, $v1Password);
+step('upgrading again is a harmless no-op (' . $again['message'] . ')', $again['ok'] === true && $again['converted'] === 0);
+
+// A crash after the v2 index was written but before every .enc was deleted.
+$legacy->encrypt($fixture, Datastore::userDir($v1User) . '/videos/Video1/1.mp4.enc', $v1Password);
+$tidied = $migrate->run($v1User, $v1Password);
+step('a re-run clears v1 leftovers from a finished upgrade (' . $tidied['message'] . ')',
+    $tidied['ok'] === true && $archivesEndingIn($v1User, '.enc') === []);
+step('...but only for the right password',
+    $migrate->run($v1User, 'not-the-v1-password-aaaa')['ok'] === false);
+
+Datastore::wipe(Datastore::userDir($v1User));
+
+// The same upgrade as login.php runs it: a detached job, password in the key
+// file, progress in the record.
+$jobUpgradeUser = 'UpgradeJob' . bin2hex(random_bytes(3));
+$makeV1Stash($jobUpgradeUser);
+$upgradeJob = Jobs::id('upgrade', $jobUpgradeUser);
+$startedUpgrade = Jobs::start('upgrade', $jobUpgradeUser, '', ['password' => $v1Password], []);
+step('the upgrade job starts', $startedUpgrade['ok'] === true);
+$waitFor(static fn(): bool => !in_array(Jobs::read($upgradeJob)['state'] ?? '', [Jobs::RUNNING, ''], true), 120.0);
+$upgradeRecord = Jobs::read($upgradeJob);
+step('the upgrade job finishes ok (' . ($upgradeRecord['message'] ?? 'no record') . ')',
+    ($upgradeRecord['state'] ?? '') === Jobs::DONE);
+step('...and leaves a v2 stash behind', !$store->isV1Stash($jobUpgradeUser)
+    && StashKey::unlock($jobUpgradeUser, $v1Password) !== null);
+step('the password never reached the job record',
+    !str_contains((string) json_encode($upgradeRecord), $v1Password));
+Jobs::forget($upgradeJob);
+Datastore::wipe(Datastore::userDir($jobUpgradeUser));
+step('cleaned up', !is_dir(Datastore::userDir($jobUpgradeUser)));
 
 echo PHP_EOL . "All smoke tests passed." . PHP_EOL;

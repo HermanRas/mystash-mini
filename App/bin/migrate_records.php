@@ -6,7 +6,7 @@ declare(strict_types=1);
  * One-off migration for stashes created before creators had their own records
  * and before quality was a derived tag.
  *
- *  - gives every creator an ID and writes their Creator{ID}/{ID}.json.enc
+ *  - gives every creator an ID and writes their Creator{ID}/{ID}.json.epc
  *  - backfills each video's `height` (measured from the real file where one
  *    exists, otherwise inferred from the legacy quality badge) and recomputes
  *    `quality` / `not_converted` from it
@@ -19,14 +19,16 @@ declare(strict_types=1);
  *   php bin/migrate_records.php {user} {password}
  */
 
-require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
+require_once __DIR__ . '/../src/StashKey.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/CreatorStore.php';
 require_once __DIR__ . '/../src/VideoEncoder.php';
 require_once __DIR__ . '/../src/VideoQuality.php';
 require_once __DIR__ . '/../src/VideoCreators.php';
 
-use MyStash\Crypto7z;
+use MyStash\StashCrypto;
+use MyStash\StashKey;
 use MyStash\Datastore;
 use MyStash\VideoEncoder;
 use MyStash\VideoCreators;
@@ -40,10 +42,11 @@ if ($user === '' || $password === '') {
 }
 
 $datastore = new Datastore();
-$crypto = new Crypto7z();
+$key = StashKey::unlock($user, $password);
+$crypto = new StashCrypto();
 $encoder = new VideoEncoder();
 
-$index = $datastore->loadIndex($user, $password);
+$index = $key !== null ? $datastore->loadIndex($user, $key) : null;
 if ($index === null) {
     fwrite(STDERR, "Could not decrypt {$user}'s index with that password.\n");
     exit(1);
@@ -67,10 +70,10 @@ foreach ($index['creators'] as $name => $creator) {
         'created_at' => $creator['created_at'] ?? date('c'),
     ];
 
-    $datastore->saveCreatorMetadata($user, $password, $id, $record);
+    $datastore->saveCreatorMetadata($user, $key, $id, $record);
     $index['creators'][$name] = $record;
 
-    echo "creator {$name} -> Creator{$id}/{$id}.json.enc\n";
+    echo "creator {$name} -> Creator{$id}/{$id}.json.epc\n";
 }
 
 // --- videos --------------------------------------------------------------
@@ -78,17 +81,17 @@ $legacyHeights = ['4K' => 2160, 'HD' => 720];
 
 foreach ($index['videos'] as &$video) {
     $id = (string) $video['id'];
-    $metadata = $datastore->loadVideoMetadata($user, $password, $id);
+    $metadata = $datastore->loadVideoMetadata($user, $key, $id);
 
     $height = $video['height'] ?? $metadata['height'] ?? null;
 
     // A real encrypted file is the only authoritative source for the height,
     // so measure it where one exists rather than trusting the old badge.
-    $archive = Datastore::videoDir($user, $id) . "/{$id}.mp4.enc";
+    $archive = Datastore::videoDir($user, $id) . "/{$id}.mp4.epc";
     if ($height === null && file_exists($archive)) {
         $workDir = Datastore::tmpfsWorkDir('migrate');
         try {
-            if ($crypto->extract($archive, $workDir, $password)) {
+            if ($crypto->extract($archive, $workDir, $key)) {
                 $plain = glob("{$workDir}/*")[0] ?? null;
                 $height = $plain !== null ? $encoder->videoHeight($plain) : null;
             }
@@ -106,7 +109,7 @@ foreach ($index['videos'] as &$video) {
 
     if ($metadata !== null) {
         $metadata = VideoCreators::set($metadata, VideoCreators::of($metadata));
-        $datastore->saveVideoMetadata($user, $password, $id, VideoQuality::apply([
+        $datastore->saveVideoMetadata($user, $key, $id, VideoQuality::apply([
             ...$metadata,
             'height' => $height,
         ]));
@@ -124,7 +127,7 @@ if (isset($index['categories']['Most Recent'])) {
     echo "dropped the \"Most Recent\" category — it is a sort order, not a category\n";
 }
 
-if (!$datastore->saveIndex($user, $password, $index)) {
+if (!$datastore->saveIndex($user, $key, $index)) {
     fwrite(STDERR, "Failed to write the index.\n");
     exit(1);
 }

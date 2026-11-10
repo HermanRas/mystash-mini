@@ -18,9 +18,9 @@ namespace MyStash;
  *
  * **What it does protect is the running service**, in two ways:
  *
- *  - **CPU.** Every login attempt against an existing stash spawns 7z to try
- *    an AES decrypt — measured at ~130ms, against ~16ms for a name with no
- *    stash behind it. There are 16 php-fpm workers. An unauthenticated
+ *  - **CPU and memory.** Every login attempt runs Argon2id (StashKey) —
+ *    ~0.5 s and 256 MB, by design, whether or not the name has a stash behind
+ *    it. There are 16 php-fpm workers. An unauthenticated
  *    attacker can spawn that work as fast as they can POST, and the whole app
  *    stops answering: exactly the lockup 4.28 was about, from a different
  *    direction. Past the limit this refuses *before* spawning anything, so a
@@ -77,14 +77,16 @@ final class LoginThrottle
     /**
      * Every failed login takes at least this long, whatever the reason.
      *
-     * Not a delay for its own sake: without it, a wrong password against a real
-     * stash took ~130ms (7z runs) and a wrong password against a name with no
-     * stash took ~16ms (nothing runs). The replies were byte-identical, but the
+     * Not a delay for its own sake: in v1, a wrong password against a real
+     * stash took ~130ms (7z ran) and a wrong password against a name with no
+     * stash took ~16ms (nothing ran). v2 runs Argon2id on both paths
+     * (StashKey::unlock), so they no longer differ by much; this floor stays as
+     * the backstop for whatever small difference is left. The replies were byte-identical, but the
      * clock told them apart, and that is a username oracle — the thing 7.1 says
      * login must not be. Bringing every failure up to the same floor closes it.
      *
-     * Small enough that it cannot itself exhaust the worker pool: 250ms is
-     * already roughly what the genuine decrypt path costs.
+     * Small enough that it cannot itself exhaust the worker pool: it is below
+     * what the Argon2id every attempt pays already costs.
      */
     public const FLOOR_SECONDS = 0.25;
 

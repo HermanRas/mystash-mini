@@ -50,10 +50,10 @@ mean_ms() { # username -> mean milliseconds over $2 attempts
 }
 
 # --- the timing oracle ----------------------------------------------------
-# A wrong password against a real stash runs 7z; against a name with no stash
-# nothing runs at all. Before the constant-time floor that was ~130ms against
-# ~16ms — replies identical, clock not, which is a username oracle and exactly
-# what 7.1 says login must not be.
+# In v1 a wrong password against a real stash ran 7z and against a name with
+# no stash nothing ran at all: ~130ms against ~16ms — replies identical, clock
+# not, which is a username oracle and exactly what 7.1 says login must not be.
+# v2 runs Argon2id on both paths, with the constant-time floor behind it.
 clear_store
 REAL_MS=$(mean_ms "$PROBE" 6)
 clear_store
@@ -83,7 +83,7 @@ echo "  locked out on attempt ${LOCKED_AT}"
 # Refusing must be cheap, or the throttle is itself the denial of service:
 # past the limit nothing is spawned and nothing sleeps.
 LOCKED_MS=$(printf '%.0f' "$(echo "$(attempt "$PROBE" "$WRONG" | cut -d'|' -f2) * 1000" | bc -l)")
-echo "  a refused attempt costs ${LOCKED_MS}ms against ${REAL_MS}ms for one that runs 7z"
+echo "  a refused attempt costs ${LOCKED_MS}ms against ${REAL_MS}ms for one that runs Argon2id"
 [ "$LOCKED_MS" -lt "$((REAL_MS / 2))" ]
 check "a throttled attempt is refused without spawning the decrypt" $?
 

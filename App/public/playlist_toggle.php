@@ -55,7 +55,7 @@ if (!$known || Playlists::find($index, $playlistId) === null) {
 
 $inPlaylist = Playlists::toggle($index, $playlistId, $videoId);
 
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+(new Datastore())->saveIndex(Session::user(), Session::key(), $index);
 Session::setIndex($index);
 
 echo json_encode(['ok' => true, 'in_playlist' => $inPlaylist]);

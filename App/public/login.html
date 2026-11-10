@@ -18,6 +18,7 @@
     <p class="hint" id="login-throttled" hidden style="color:#ff6b6b;"></p>
     <p class="hint" id="login-stale" hidden style="color:#ffa31a;">Your session ended: this stash's password was changed elsewhere. Sign in with the new password.</p>
     <p class="hint" id="login-deleted" hidden style="color:#ffa31a;">Your stash has been deleted. Nothing of it remains — the name is free to use again.</p>
+    <p class="hint" id="login-upgraded" hidden style="color:#7bd88f;">Your stash has been upgraded to the v2 format. Sign in again to open it.</p>
 
     <form action="login.php" method="post">
       <div class="field">
@@ -31,7 +32,7 @@
       <button type="submit" class="btn block"><img class="btn-icon" src="assets/img/icons/login.png" alt="">Unlock Stash</button>
     </form>
 
-    <p class="hint">Your password is never stored — it's the key that decrypts your stash. Wrong password or unknown username look identical: access denied.</p>
+    <p class="hint">Your password is never stored — the key that decrypts your stash is derived from it. Wrong password or unknown username look identical: access denied.</p>
     <p class="hint"><a href="register.php" style="color:var(--accent);"><img class="btn-icon" src="assets/img/icons/register.png" alt="">Create a new stash</a></p>
   </div>
 </div>
@@ -40,6 +41,10 @@
 
   if (params.has('deleted')) {
     document.getElementById('login-deleted').hidden = false;
+  }
+
+  if (params.has('upgraded')) {
+    document.getElementById('login-upgraded').hidden = false;
   }
 
   const error = params.get('error');

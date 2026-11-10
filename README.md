@@ -1,10 +1,15 @@
-# MyStash v1.0.0
+# MyStash v2.0.0
 
 ![MyStash](Docs/Assets/Banner.jpg)
 
 A private, self-hosted video wall for a personal library. Everything is
-encrypted at rest with your password, which is never stored anywhere — and
-nothing on any page is fetched from anyone else's server.
+encrypted at rest with a key derived from your password, which is never stored
+anywhere — and nothing on any page is fetched from anyone else's server.
+
+> **Upgrading from v1?** v2.0.0 replaces the 7-Zip archives (`.enc`) with an
+> authenticated libsodium format (`.epc`). A v1 stash upgrades itself the first
+> time you sign in. Read [Docs/v2_migration.md](Docs/v2_migration.md) first —
+> and back up `App/Data` before you pull the new image.
 
 
 *DEV*
@@ -43,14 +48,23 @@ including what to do before anyone else can reach it, are in
 ## The idea
 
 A stash is a directory and a password. There is no account record, no stored
-password hash, and no administrator. The password **is** the AES key: it opens
-a 7-Zip archive holding your video index, and if the archive does not decrypt,
-the login has failed. Nothing else is consulted, because there is nothing else.
+password hash, and no administrator. Your password goes through **Argon2id**
+(about half a second and 256 MB, with a per-stash salt) to become the
+encryption key; that key opens the archive holding your video index, and if
+the archive does not decrypt, the login has failed. Nothing else is consulted,
+because there is nothing else.
 
 Everything follows from that:
 
-- **Every file on disk is encrypted** — the videos, the preview clips, the
-  thumbnails, the metadata, the creator records and their pictures.
+- **Every file on disk is encrypted and authenticated** — the videos, the
+  preview clips, the thumbnails, the metadata, the creator records and their
+  pictures, each an `.epc` archive: XChaCha20-Poly1305 in 1 MiB chunks
+  (libsodium secretstream). A changed, truncated or extended file is refused,
+  not decrypted into something subtly wrong.
+- **Guessing is expensive.** Every password guess against a copy of the
+  archives costs the attacker a full Argon2id run, and the salt makes that work
+  per-stash. The password itself is never on a command line and never in the
+  session — the session holds only the derived key.
 - **Plaintext exists only in RAM.** Decryption stages into `/dev/shm` for as
   long as a video is playing or converting, and is wiped after.
 - **Two stashes cannot see each other**, and that is tested rather than
@@ -58,8 +72,20 @@ Everything follows from that:
 - **A forgotten password is a destroyed library.** There is no reset. This is
   the cost of the guarantee above, and it is not negotiable after the fact.
 
-It runs as one container — nginx, PHP-FPM, `ffmpeg` and `7z` — and needs
-nothing else. No database, no queue, no cloud account, no CDN.
+It runs as one container — nginx, PHP-FPM with libsodium, and `ffmpeg` (`7z`
+is still in the image, only to read v1 stashes during their upgrade) — and
+needs nothing else. No database, no queue, no cloud account, no CDN.
+
+Your data is never locked into the app: [`tools/decode.php`](tools/decode.php)
+is a single standalone file that decrypts any `.epc` archive, or a whole stash,
+with nothing but PHP and the password:
+
+```bash
+php tools/decode.php -f App/Data/me/videos/Video1/1.mp4.epc    # asks for the password
+php tools/decode.php -F App/Data/me/ -o ~/my-stash-plain/
+```
+
+It is kept in this repository but not in the Docker image.
 
 ---
 
@@ -93,7 +119,7 @@ App/
   src/             the application: crypto, datastore, ingest, queries, jobs
   views/           the header and small shared partials
   bin/             CLI entry points — the job worker and one-off migrations
-  tests/           the smoke suite (227 checks)
+  tests/           the smoke suite (355 checks)
   Data/            the encrypted datastore — gitignored, never leaves the host
   nginx.conf       the web server's whole configuration
   php.ini          upload limits; php.prod.ini is the production hardening, baked
@@ -104,7 +130,9 @@ Docs/
   SPECIFICATIONS.md  what the app does and why, clause by clause
   PLAN.md            the phased build log
   DEPLOY.md          how to run it for real
+  v2_migration.md    v1 (7-Zip) → v2 (libsodium): what changed, how to upgrade
   Assets/            branding, icon sheets and these screenshots
+tools/decode.php     standalone decrypter for .epc archives — repo only, not in the image
 dev/                 the check scripts and the Playwright container's scripts
 .github/workflows/   CI: builds the container, proves it serves the app, publishes it
 ```
@@ -112,10 +140,10 @@ dev/                 the check scripts and the Playwright container's scripts
 Three things worth knowing about the shape:
 
 - **`App/src` has no framework and no autoloader** — each class is one file
-  with `require_once` at the top. The whole application is seventeen classes.
-- **Every write goes through `Crypto7z`.** Nothing in `public/` touches a data
-  file directly, which is why "is it encrypted?" has one answer instead of
-  thirty.
+  with `require_once` at the top. The whole application is twenty-two classes.
+- **Every write goes through `StashCrypto`**, with a key from `StashKey`.
+  Nothing in `public/` touches a data file directly, which is why "is it
+  encrypted?" has one answer instead of thirty.
 - **Long jobs are detached.** Conversion and re-keying run in
   `bin/job_worker.php` with no request behind them; the browser polls
   `job_status.php`. Close the tab and the job carries on.
@@ -259,8 +287,9 @@ against the ones this video is already on.
 ![Profile](Docs/Assets/README/22_profile.png)
 
 Changing the password re-encrypts **every archive in the stash**, because the
-password is the key. It runs as a background job with a progress bar; each
-archive keeps its previous bytes as `.enc.old` until the whole run succeeds,
+key is derived from the password (and a re-key also gives the stash a fresh
+salt). It runs as a background job with a progress bar; each
+archive keeps its previous bytes as `.epc.old` until the whole run succeeds,
 and the index is rewritten last — so an interrupted re-key leaves your current
 password still working.
 
@@ -301,7 +330,7 @@ across the site and fails if any of them leaves this origin.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-docker compose exec app php /app/tests/smoke_test.php     # 251 checks
+docker compose exec -u www-data app php /app/tests/smoke_test.php     # 355 checks
 ```
 
 The `dev/` scripts each prove one property against real HTTP endpoints and, for
@@ -321,6 +350,8 @@ the parts curl cannot reach, a real browser in a Playwright container:
 | `run_stats_check.sh` | the Stats screen: sizes, Inspect, and a 30fps / 1920×1080 reduction |
 | `run_layout_check.sh` | the management screens share the watch page's column |
 | `run_font_check.sh` | nothing on the site is fetched from another host |
+| `run_v2_check.sh` | the v2 format over HTTP: no password in the session, login timing, streaming, re-key, and a v1 stash upgrading on sign-in |
+| `run_decode_check.sh` | `tools/decode.php` decrypts what the app wrote, in a stock PHP container, and refuses tampered archives |
 
 `dev/push_image.sh` builds the container here, runs the same verification CI
 does, and pushes it to GHCR — for when the thing that is broken is CI itself.
@@ -349,4 +380,5 @@ above can be reproduced exactly, and compared against after a change.
 | --- | --- |
 | [Docs/SPECIFICATIONS.md](Docs/SPECIFICATIONS.md) | what the app does and why — app flow, datastore layout, encryption model, UI spec |
 | [Docs/DEPLOY.md](Docs/DEPLOY.md) | running it for real: TLS, backups, upgrades, and what this deployment is not |
+| [Docs/v2_migration.md](Docs/v2_migration.md) | v1 → v2: what changed in the encryption, and how a stash is upgraded |
 | [Docs/PLAN.md](Docs/PLAN.md) | the phased build log, including the reasoning behind each decision |

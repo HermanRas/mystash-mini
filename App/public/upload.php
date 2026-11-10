@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
 require_once __DIR__ . '/../src/VideoEncoder.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/Jobs.php';
@@ -53,7 +53,7 @@ $index = Session::refreshIndex();
 try {
     $entry = (new VideoIngest())->ingest(
         Session::user(),
-        Session::password(),
+        Session::key(),
         $file['tmp_name'],
         $file['name'],
         $index,
@@ -67,7 +67,7 @@ try {
 
 $index['videos'][] = $entry;
 
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+(new Datastore())->saveIndex(Session::user(), Session::key(), $index);
 Session::setIndex($index);
 
 // The hover clip decodes the whole video, which is what used to keep this
@@ -80,7 +80,7 @@ $started = Jobs::start(
     'preview',
     Session::user(),
     (string) $entry['id'],
-    ['password' => Session::password()],
+    ['key' => Session::key()],
     ['message' => 'Starting…'],
 );
 

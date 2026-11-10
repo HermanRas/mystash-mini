@@ -302,7 +302,7 @@ final class VideoEncoder
                 proc_close($process);
 
                 // Half a file is not a conversion. The caller keeps the
-                // original because it never overwrites it (Crypto7z::replace),
+                // original because it never overwrites it (StashCrypto::replace),
                 // but leaving this behind would litter tmpfs.
                 @unlink($outputPath);
 

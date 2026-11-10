@@ -18,8 +18,8 @@ check() { if [ "$2" = "0" ]; then echo "PASS: $1"; else echo "FAIL: $1"; fails=$
 page() { curl -s -b "$JAR" "${BASE}/stats.php"; }
 
 cleanup() {
-  # A worker finishing after the rm would recreate part of the stash (7zip
-  # creates missing parents), so wait for it first.
+  # A worker finishing after the rm could write into the stash (v1's 7zip
+  # recreated missing parents), so wait for it first.
   for _ in $(seq 1 60); do
     running=$(docker compose exec -T -u www-data app sh -c 'pgrep -fc "[j]ob_worker" || true' | tr -d "\r")
     [ "${running:-0}" = "0" ] && break
@@ -44,7 +44,7 @@ require_once \"/app/src/VideoCategories.php\";
 require_once \"/app/src/VideoIngest.php\";
 require_once \"/app/src/Datastore.php\";
 \$u = getenv(\"U\"); \$p = getenv(\"P\");
-if (!(new MyStash\User())->create(\$u, \$p)) { fwrite(STDERR, \"create failed\n\"); exit(1); }
+if (!(\$p = (new MyStash\User())->create(\$u, \$p))) { fwrite(STDERR, \"create failed\n\"); exit(1); }
 \$store = new MyStash\Datastore();
 \$index = \$store->loadIndex(\$u, \$p);
 \$entry = (new MyStash\VideoIngest())->ingest(\$u, \$p, \"/dev/shm/stats-src.mp4\", \"Big sixty.mp4\", \$index);
@@ -115,10 +115,11 @@ grep -q 'Within 30fps and 1920×1080' <<<"$HTML"; check "nothing more is offered
 
 # --- and the stored file really is what the page says --------------------------
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
-require_once "/app/src/Crypto7z.php";
+require_once "/app/src/StashCrypto.php";
+require_once "/app/src/StashKey.php";
 require_once "/app/src/VideoEncoder.php";
 $dir = "/app/Data/" . getenv("U") . "/videos/Video1";
-(new MyStash\Crypto7z())->extract("{$dir}/1.mp4.enc", "/dev/shm/stats-after", getenv("P"));
+(new MyStash\StashCrypto())->extract("{$dir}/1.mp4.epc", "/dev/shm/stats-after", MyStash\StashKey::unlock(getenv("U"), getenv("P")));
 $file = glob("/dev/shm/stats-after/*")[0] ?? null;
 $probe = $file ? (new MyStash\VideoEncoder())->probe($file) : null;
 printf("%s: the stored video is 1920x1080 at 30fps H.265 (%s)\n",

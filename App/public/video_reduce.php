@@ -62,7 +62,7 @@ $started = Jobs::start(
     'convert',
     Session::user(),
     $id,
-    ['password' => Session::password()],
+    ['key' => Session::key()],
     [
         'message' => 'Starting…',
         'reduce_fps' => $reduceFps,

@@ -126,12 +126,12 @@ $navActive = '';
     </form>
 
     <p class="hint">
-      Your password <em>is</em> the encryption key, so changing it re-encrypts every
+      Your encryption key is derived from your password, so changing it re-encrypts every
       archive in your stash<?php if ($videoCount > 0): ?>, all <?= $videoCount ?>
       video<?= $videoCount === 1 ? '' : 's' ?> included<?php endif ?>. On a large
       stash this takes a while, so it runs in the background and this page shows how
       far it has got — closing the tab will not stop it. Each archive
-      keeps its previous bytes as <code>.enc.old</code> until the whole run succeeds,
+      keeps its previous bytes as <code>.epc.old</code> until the whole run succeeds,
       and the index is rewritten last, so an interrupted run leaves your current
       password still working.
     </p>

@@ -52,14 +52,14 @@ foreach ($index['videos'] as &$video) {
 }
 unset($video);
 
-$metadata = $datastore->loadVideoMetadata(Session::user(), Session::password(), $id);
+$metadata = $datastore->loadVideoMetadata(Session::user(), Session::key(), $id);
 if ($metadata !== null && $fields !== []) {
     $metadata = [...$metadata, ...$fields];
     unset($metadata['creator']);
-    $datastore->saveVideoMetadata(Session::user(), Session::password(), $id, $metadata);
+    $datastore->saveVideoMetadata(Session::user(), Session::key(), $id, $metadata);
 }
 
-$datastore->saveIndex(Session::user(), Session::password(), $index);
+$datastore->saveIndex(Session::user(), Session::key(), $index);
 Session::setIndex($index);
 
 header('Location: video.php?id=' . urlencode($id));

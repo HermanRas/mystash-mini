@@ -9,7 +9,7 @@
  *
  * An upload has two halves and only the first has a percentage. Sending the
  * bytes is measurable; what happens afterwards — ffmpeg reading the duration,
- * grabbing the preview frame, 7z encrypting the video into the datastore — is
+ * grabbing the preview frame, encrypting the video into the datastore — is
  * work the browser cannot see. (The hover clip, which decodes the whole video,
  * is no longer part of it: that is a background job, see upload.php.) So the
  * card switches to the same sweeping indeterminate bar the conversion job uses (assets/job.js) rather than

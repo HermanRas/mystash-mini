@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
+require_once __DIR__ . '/StashCrypto.php';
 require_once __DIR__ . '/Datastore.php';
 require_once __DIR__ . '/VideoCreators.php';
 
@@ -13,7 +13,7 @@ require_once __DIR__ . '/VideoCreators.php';
  * plus the timestamp it points at. The same category may be assigned more than
  * once at different timestamps.
  *
- * The assignments live in the per-video metadata (Video{ID}/{ID}.json.enc);
+ * The assignments live in the per-video metadata (Video{ID}/{ID}.json.epc);
  * the index keeps only the de-duplicated names so the wall can render and
  * filter without decrypting every video's metadata.
  */
@@ -26,9 +26,9 @@ final class VideoCategories
     /**
      * Assignments for a video, sorted by timestamp.
      */
-    public function load(string $user, string $password, string $id): array
+    public function load(string $user, string $key, string $id): array
     {
-        $metadata = $this->datastore->loadVideoMetadata($user, $password, $id);
+        $metadata = $this->datastore->loadVideoMetadata($user, $key, $id);
         $assignments = $metadata['categories'] ?? [];
 
         usort($assignments, static fn($a, $b) => $a['timestamp_seconds'] <=> $b['timestamp_seconds']);
@@ -40,11 +40,11 @@ final class VideoCategories
      * Writes assignments to the video's metadata and mirrors the unique names
      * into the given index (by reference) so both stay consistent.
      */
-    public function save(string $user, string $password, string $id, array $assignments, array &$index): bool
+    public function save(string $user, string $key, string $id, array $assignments, array &$index): bool
     {
         usort($assignments, static fn($a, $b) => $a['timestamp_seconds'] <=> $b['timestamp_seconds']);
 
-        $metadata = $this->datastore->loadVideoMetadata($user, $password, $id)
+        $metadata = $this->datastore->loadVideoMetadata($user, $key, $id)
             ?? $this->metadataFromIndex($index, $id);
 
         $metadata['categories'] = $assignments;
@@ -58,7 +58,7 @@ final class VideoCategories
         }
         unset($video);
 
-        return $this->datastore->saveVideoMetadata($user, $password, $id, $metadata);
+        return $this->datastore->saveVideoMetadata($user, $key, $id, $metadata);
     }
 
     /**

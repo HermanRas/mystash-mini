@@ -69,18 +69,18 @@ $result = match ((string) ($_POST['source'] ?? '')) {
             ];
         }
 
-        return $preview->fromUpload(Session::user(), Session::password(), $id, $file['tmp_name']);
+        return $preview->fromUpload(Session::user(), Session::key(), $id, $file['tmp_name']);
     })(),
 
     'timestamp' => $preview->fromTimestamp(
         Session::user(),
-        Session::password(),
+        Session::key(),
         $id,
         (float) ($_POST['preview_at'] ?? 0),
     ),
 
     'clip' => (function () use ($id): array {
-        $started = Jobs::start('preview', Session::user(), $id, ['password' => Session::password()]);
+        $started = Jobs::start('preview', Session::user(), $id, ['key' => Session::key()]);
 
         return $started['ok']
             ? ['ok' => true, 'message' => 'Building the hover preview in the background.']

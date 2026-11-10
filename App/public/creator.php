@@ -27,7 +27,7 @@ $editing = $_GET['edit'] ?? null;
 // Full details come from the creator's own encrypted record; the index copy is
 // only the denormalized summary the grid renders from.
 $editCreator = ($editing !== null && $editing !== '')
-    ? (new CreatorStore())->load(Session::user(), Session::password(), $index, $editing)
+    ? (new CreatorStore())->load(Session::user(), Session::key(), $index, $editing)
     : null;
 
 function videoCount(array $videos, string $creatorName): int

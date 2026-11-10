@@ -3,13 +3,13 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../src/Session.php';
-require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/Jobs.php';
 require_once __DIR__ . '/../src/VideoEncoder.php';
 require_once __DIR__ . '/../src/VideoQuality.php';
 
-use MyStash\Crypto7z;
+use MyStash\StashCrypto;
 use MyStash\Datastore;
 use MyStash\Jobs;
 use MyStash\Session;
@@ -21,9 +21,9 @@ use MyStash\VideoQuality;
  * size, and remember them in the index so the screen can show them — and offer
  * a reduction — without decrypting it again.
  *
- * It has to decrypt the whole video to tmpfs to do it. The archives are 7z with
- * encrypted headers, so there is no way to hand ffprobe just the first few
- * megabytes, and an MP4 whose index is at the end needs the end anyway. That
+ * It has to decrypt the whole video to tmpfs to do it. An MP4 whose index is
+ * at the end needs the end anyway, and the archive is one authenticated
+ * stream that is only trusted once its FINAL chunk has checked out. That
  * is the same cost as pressing play, so it runs in the request — but with the
  * session lock released first: a big video takes a few seconds to decrypt,
  * and without this every other page in that browser would queue behind it.
@@ -38,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $id = (string) ($_POST['id'] ?? '');
 $user = Session::user();
-$password = Session::password();
+$key = Session::key();
 $index = Session::refreshIndex();
 
 $known = false;
@@ -64,13 +64,13 @@ if ($job !== null && $job['state'] === Jobs::RUNNING) {
 
 session_write_close();
 
-$archivePath = Datastore::videoDir($user, $id) . "/{$id}.mp4.enc";
+$archivePath = Datastore::videoDir($user, $id) . "/{$id}.mp4.epc";
 $workDir = Datastore::tmpfsWorkDir('inspect');
 $probe = null;
 $seconds = null;
 
 try {
-    if (is_file($archivePath) && (new Crypto7z())->extract($archivePath, $workDir, $password)) {
+    if (is_file($archivePath) && (new StashCrypto())->extract($archivePath, $workDir, $key)) {
         $plainPath = (glob("{$workDir}/*") ?: [])[0] ?? null;
 
         if ($plainPath !== null && is_file($plainPath)) {
@@ -101,7 +101,7 @@ $measured = [
 // Re-read rather than reuse the copy from before the decrypt: that took
 // seconds, and another tab may have saved the index in the meantime.
 $datastore = new Datastore();
-$index = $datastore->loadIndex($user, $password);
+$index = $datastore->loadIndex($user, $key);
 
 if ($index === null) {
     header('Location: stats.php?error=inspect#video-' . urlencode($id));
@@ -118,11 +118,11 @@ foreach ($index['videos'] as &$video) {
 }
 unset($video);
 
-$metadata = $datastore->loadVideoMetadata($user, $password, $id);
+$metadata = $datastore->loadVideoMetadata($user, $key, $id);
 if ($metadata !== null) {
-    $datastore->saveVideoMetadata($user, $password, $id, VideoQuality::apply([...$metadata, ...$measured]));
+    $datastore->saveVideoMetadata($user, $key, $id, VideoQuality::apply([...$metadata, ...$measured]));
 }
 
-$datastore->saveIndex($user, $password, $index);
+$datastore->saveIndex($user, $key, $index);
 
 header('Location: stats.php?inspected=' . urlencode($id) . '#video-' . urlencode($id));

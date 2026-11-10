@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $index = Session::refreshIndex();
 
 if (Playlists::delete($index, (string) ($_POST['id'] ?? ''))) {
-    (new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+    (new Datastore())->saveIndex(Session::user(), Session::key(), $index);
     Session::setIndex($index);
 }
 

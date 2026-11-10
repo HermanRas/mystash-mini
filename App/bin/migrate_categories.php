@@ -12,7 +12,7 @@ declare(strict_types=1);
  *         same category may appear several times at different timestamps.
  *
  * It also prunes index entries that have no media behind them (no
- * Video{ID}/{ID}.mp4.enc and no existing metadata archive) — that clears
+ * Video{ID}/{ID}.mp4.epc and no existing metadata archive) — that clears
  * orphans left when a video's files were deleted but its index entry was
  * restored by a session writing back a stale copy of the index.
  *
@@ -23,7 +23,10 @@ require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/VideoCreators.php';
 require_once __DIR__ . '/../src/VideoCategories.php';
 
+require_once __DIR__ . '/../src/StashKey.php';
+
 use MyStash\Datastore;
+use MyStash\StashKey;
 
 $user = $argv[1] ?? null;
 $password = $argv[2] ?? null;
@@ -34,7 +37,8 @@ if ($user === null || $password === null) {
 }
 
 $datastore = new Datastore();
-$index = $datastore->loadIndex($user, $password);
+$key = StashKey::unlock($user, $password);
+$index = $key !== null ? $datastore->loadIndex($user, $key) : null;
 
 if ($index === null) {
     fwrite(STDERR, "Could not decrypt the index for {$user} — wrong password or missing datastore.\n");
@@ -46,8 +50,8 @@ $keptVideos = [];
 foreach ($index['videos'] as $video) {
     $id = $video['id'];
     $dir = Datastore::videoDir($user, $id);
-    $hasMedia = file_exists("{$dir}/{$id}.mp4.enc");
-    $metadata = $datastore->loadVideoMetadata($user, $password, $id);
+    $hasMedia = file_exists("{$dir}/{$id}.mp4.epc");
+    $metadata = $datastore->loadVideoMetadata($user, $key, $id);
 
     if (!$hasMedia && $metadata === null) {
         echo "pruned  id={$id} ({$video['title']}) — no media, no metadata\n";
@@ -91,7 +95,7 @@ foreach ($index['videos'] as $video) {
 
     unset($metadata['tags']);
     $metadata['categories'] = $assignments;
-    $datastore->saveVideoMetadata($user, $password, $id, $metadata);
+    $datastore->saveVideoMetadata($user, $key, $id, $metadata);
 
     unset($video['tags']);
     $video['categories'] = Datastore::categoryNames($assignments);
@@ -102,7 +106,7 @@ foreach ($index['videos'] as $video) {
 
 $index['videos'] = $keptVideos;
 
-if (!$datastore->saveIndex($user, $password, $index)) {
+if (!$datastore->saveIndex($user, $key, $index)) {
     fwrite(STDERR, "Failed to write the migrated index.\n");
     exit(1);
 }

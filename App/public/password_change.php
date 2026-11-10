@@ -5,9 +5,11 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Session.php';
 require_once __DIR__ . '/../src/Jobs.php';
 require_once __DIR__ . '/../src/User.php';
+require_once __DIR__ . '/../src/StashKey.php';
 
 use MyStash\Jobs;
 use MyStash\Session;
+use MyStash\StashKey;
 use MyStash\User;
 
 /**
@@ -47,25 +49,29 @@ if ($new === $current) {
     $back('error=same');
 }
 
-// No password is stored anywhere, so the thing to check against is the one
-// this session already proved at login by decrypting the index with it.
-// Rekey::run() then re-proves it the only authoritative way — by decrypting —
-// before it touches a single archive.
-if (!hash_equals(Session::password(), $current)) {
+// No password is stored anywhere — not even in the session, which holds only
+// the key login derived from it. So the check is to derive again, with the
+// stash's salt, and compare keys. That costs one Argon2id run (~0.5 s), which
+// is also a fair price to make someone at an unlocked session pay per guess.
+// Rekey::run() then re-proves the key the only authoritative way — by
+// decrypting — before it touches a single archive.
+if (!StashKey::matches(Session::key(), $current)) {
     $back('error=wrong');
 }
 
-// Re-encrypting every archive is CPU-bound 7zip work over the whole stash, so
+// Re-encrypting every archive is work over the whole stash, so
 // it runs as a detached background job rather than inside this request
 // (Docs/PLAN.md 6.6). The browser used to sit on a pending request for minutes
 // with no way to tell whether it had finished; now the Profile page polls
 // job_status.php and shows "re-encrypted 14 of 37".
 //
-// The passwords go to the worker through the job's tmpfs key file, which it
-// deletes as it reads — never on its argv, where `ps` would show them.
+// The current KEY and the new password go to the worker through the job's
+// tmpfs key file, which it deletes as it reads — never on its argv, where `ps`
+// would show them.
+//
 // Any other job on this stash is writing archives under the *current*
-// password — a just-uploaded video's hover preview, a conversion — and one
-// that lands after the re-key has passed it is a file the new password cannot
+// key — a just-uploaded video's hover preview, a conversion — and one
+// that lands after the re-key has passed it is a file the new key cannot
 // open. Wait for them rather than race them.
 $other = Jobs::aliveFor(Session::user());
 
@@ -77,7 +83,7 @@ $started = Jobs::start(
     'rekey',
     Session::user(),
     '',
-    ['old_password' => $current, 'new_password' => $new],
+    ['old_key' => Session::key(), 'new_password' => $new],
     ['message' => 'Starting…'],
 );
 

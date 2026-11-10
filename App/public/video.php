@@ -46,19 +46,19 @@ $convertJob = Jobs::read(Jobs::id('convert', Session::user(), $id));
 $converting = $convertJob !== null && $convertJob['state'] === Jobs::RUNNING;
 
 $editing = isset($_GET['edit']);
-$assignments = (new VideoCategories())->load(Session::user(), Session::password(), $id);
+$assignments = (new VideoCategories())->load(Session::user(), Session::key(), $id);
 
 // The hover clip is built by a job after upload rather than during it, so a
 // video can exist without one for a while — or for good, if that job failed.
 $previewJob = Jobs::read(Jobs::id('preview', Session::user(), $id));
 $buildingClip = $previewJob !== null && $previewJob['state'] === Jobs::RUNNING;
-$hasClip = is_file(Datastore::videoDir(Session::user(), $id) . "/{$id}.mp4.preview.enc");
+$hasClip = is_file(Datastore::videoDir(Session::user(), $id) . "/{$id}.mp4.preview.epc");
 
 // Where the current preview came from (3.9). Only read while editing: the
 // watch page does not need it, and this opens the per-video metadata archive.
 $previewCapture = null;
 if ($editing) {
-    $metadata = (new Datastore())->loadVideoMetadata(Session::user(), Session::password(), $id);
+    $metadata = (new Datastore())->loadVideoMetadata(Session::user(), Session::key(), $id);
     $previewCapture = $metadata['preview_capture_seconds'] ?? null;
 }
 
@@ -206,9 +206,9 @@ $navActive = 'videos';
           </div>
         </div>
 
-        <?php /* The way back out. Everything in the stash is encrypted with a
-                 password 7zip holds, so without this the only way to get a
-                 video off the wall again was the command line. */ ?>
+        <?php /* The way back out. Everything in the stash is encrypted, so
+                 without this the only way to get a video off the wall again
+                 was the command line (tools/decode.php). */ ?>
         <a class="btn secondary" href="media.php?id=<?= urlencode($id) ?>&amp;type=video&amp;download=1">
           <img class="btn-icon" src="assets/img/icons/download.png" alt="">Download
         </a>

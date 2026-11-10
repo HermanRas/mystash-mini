@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
+require_once __DIR__ . '/StashCrypto.php';
 require_once __DIR__ . '/Datastore.php';
 require_once __DIR__ . '/VideoEncoder.php';
 require_once __DIR__ . '/VideoQuality.php';
@@ -20,7 +20,7 @@ require_once __DIR__ . '/VideoQuality.php';
  *              join what is either side of it.
  *
  * A trim never touches the video. It is made into a second archive beside it,
- * `{ID}_trim.mp4.enc`, by the same detached convert job a Convert or a Reduce
+ * `{ID}_trim.mp4.epc`, by the same detached convert job a Convert or a Reduce
  * uses — sharing that job's id is what stops a trim and a conversion of the
  * same video running over each other. The user then plays the trimmed copy and
  * either keeps it, which swaps it in for the original, or deletes it.
@@ -38,14 +38,14 @@ final class VideoTrim
 
     public function __construct(
         private VideoEncoder $encoder = new VideoEncoder(),
-        private Crypto7z $crypto = new Crypto7z(),
+        private StashCrypto $crypto = new StashCrypto(),
         private Datastore $datastore = new Datastore(),
     ) {
     }
 
     public static function archivePath(string $user, string $id): string
     {
-        return Datastore::videoDir($user, $id) . "/{$id}_trim.mp4.enc";
+        return Datastore::videoDir($user, $id) . "/{$id}_trim.mp4.epc";
     }
 
     public static function exists(string $user, string $id): bool
@@ -235,7 +235,7 @@ final class VideoTrim
 
     /**
      * Worker side: decrypts the video, encodes the trimmed copy and stores it
-     * as `{ID}_trim.mp4.enc`. The video itself is only read.
+     * as `{ID}_trim.mp4.epc`. The video itself is only read.
      *
      * @param array{mode: string, from_ms: int, to_ms: ?int} $spec
      * @param callable(float, float): void|null $onProgress
@@ -244,14 +244,14 @@ final class VideoTrim
      */
     public function make(
         string $user,
-        string $password,
+        string $key,
         string $id,
         array $spec,
         ?callable $onProgress = null,
         ?callable $onStage = null,
     ): array {
         $videoDir = Datastore::videoDir($user, $id);
-        $videoArchive = "{$videoDir}/{$id}.mp4.enc";
+        $videoArchive = "{$videoDir}/{$id}.mp4.epc";
         $trimArchive = self::archivePath($user, $id);
 
         if (!is_file($videoArchive)) {
@@ -269,7 +269,7 @@ final class VideoTrim
 
             $extractDir = "{$workDir}/extract";
 
-            if (!$this->crypto->extract($videoArchive, $extractDir, $password)) {
+            if (!$this->crypto->extract($videoArchive, $extractDir, $key)) {
                 return ['ok' => false, 'message' => 'The video could not be opened.'];
             }
 
@@ -313,21 +313,22 @@ final class VideoTrim
 
             $onStage && $onStage('Encrypting…');
 
-            // Deleted while it was being trimmed: 7z would recreate the
-            // directory around a lone trimmed copy no screen can reach.
+            // Deleted while it was being trimmed: saving now would at best fail
+            // and at worst (v1's 7z did this) recreate the directory around a
+            // lone trimmed copy no screen can reach.
             if (!is_dir($videoDir)) {
                 return ['ok' => false, 'message' => 'The video was deleted before the trim finished.'];
             }
 
-            if (!$this->crypto->replace($trimmed, $trimArchive, $password)) {
+            if (!$this->crypto->replace($trimmed, $trimArchive, $key)) {
                 return ['ok' => false, 'message' => 'The trimmed copy could not be saved. The video is untouched.'];
             }
 
-            $metadata = $this->datastore->loadVideoMetadata($user, $password, $id);
+            $metadata = $this->datastore->loadVideoMetadata($user, $key, $id);
 
             // Keep cannot move the categories without this, so a copy whose
             // details were not recorded is not offered at all.
-            $saved = $metadata !== null && $this->datastore->saveVideoMetadata($user, $password, $id, [
+            $saved = $metadata !== null && $this->datastore->saveVideoMetadata($user, $key, $id, [
                 ...$metadata,
                 'trim' => [
                     ...$spec,
@@ -359,22 +360,22 @@ final class VideoTrim
      * The order is media → per-video metadata → index (Docs/PLAN.md 4.29), so
      * an interruption leaves an index that still describes what is on disk.
      * The swap is a rename: both archives are already encrypted under the same
-     * password and sit in the same directory, so there is nothing to re-encode
+     * key and sit in the same directory, so there is nothing to re-encode
      * and no moment where the video is missing.
      *
      * @return array{ok: bool, message: string, frame_at: ?float}
      */
-    public function keep(string $user, string $password, string $id): array
+    public function keep(string $user, string $key, string $id): array
     {
         $trimArchive = self::archivePath($user, $id);
-        $metadata = $this->datastore->loadVideoMetadata($user, $password, $id);
+        $metadata = $this->datastore->loadVideoMetadata($user, $key, $id);
         $trim = $metadata['trim'] ?? null;
 
         if (!is_file($trimArchive) || !is_array($trim)) {
             return ['ok' => false, 'message' => 'There is no trimmed copy to keep.', 'frame_at' => null];
         }
 
-        if (!rename($trimArchive, Datastore::videoDir($user, $id) . "/{$id}.mp4.enc")) {
+        if (!rename($trimArchive, Datastore::videoDir($user, $id) . "/{$id}.mp4.epc")) {
             return ['ok' => false, 'message' => 'The trimmed copy could not be swapped in. The video is unchanged.', 'frame_at' => null];
         }
 
@@ -427,13 +428,13 @@ final class VideoTrim
             'preview_capture_seconds' => $capture,
         ]);
 
-        if (!$this->datastore->saveVideoMetadata($user, $password, $id, $metadata)) {
+        if (!$this->datastore->saveVideoMetadata($user, $key, $id, $metadata)) {
             error_log("MyStash trim: kept the trim of {$id} for {$user} but could not save its metadata");
 
             return ['ok' => false, 'message' => 'The trimmed video is in place, but its details could not be saved.', 'frame_at' => $frameAt];
         }
 
-        $index = $this->datastore->loadIndex($user, $password);
+        $index = $this->datastore->loadIndex($user, $key);
 
         if ($index !== null) {
             foreach ($index['videos'] as &$video) {
@@ -449,7 +450,7 @@ final class VideoTrim
             unset($video);
         }
 
-        if ($index === null || !$this->datastore->saveIndex($user, $password, $index)) {
+        if ($index === null || !$this->datastore->saveIndex($user, $key, $index)) {
             error_log("MyStash trim: kept the trim of {$id} for {$user} but could not save the index");
 
             return ['ok' => false, 'message' => 'The trimmed video is in place, but the wall could not be updated.', 'frame_at' => $frameAt];
@@ -464,7 +465,7 @@ final class VideoTrim
      *
      * @return array{ok: bool, message: string}
      */
-    public function discard(string $user, string $password, string $id): array
+    public function discard(string $user, string $key, string $id): array
     {
         $trimArchive = self::archivePath($user, $id);
 
@@ -472,11 +473,11 @@ final class VideoTrim
             return ['ok' => false, 'message' => 'The trimmed copy could not be deleted.'];
         }
 
-        $metadata = $this->datastore->loadVideoMetadata($user, $password, $id);
+        $metadata = $this->datastore->loadVideoMetadata($user, $key, $id);
 
         if ($metadata !== null && array_key_exists('trim', $metadata)) {
             unset($metadata['trim']);
-            $this->datastore->saveVideoMetadata($user, $password, $id, $metadata);
+            $this->datastore->saveVideoMetadata($user, $key, $id, $metadata);
         }
 
         return ['ok' => true, 'message' => 'Deleted the trimmed copy. The video is unchanged.'];

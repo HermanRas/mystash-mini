@@ -21,7 +21,7 @@ DC="docker compose -f docker-compose.yml -f docker-compose.dev.yml"
 
 cleanup() {
   # Same reason as run_convert_check.sh: a worker still running would recreate
-  # part of what is about to be removed, because 7zip creates missing parents.
+  # part of what is about to be removed (v1's 7zip created missing parents).
   for _ in $(seq 1 60); do
     running=$($DC exec -T -u www-data app sh -c 'pgrep -fc "[j]ob_worker" || true' | tr -d "\r")
     [ "${running:-0}" = "0" ] && break
@@ -47,7 +47,7 @@ require_once "/app/src/VideoCategories.php";
 require_once "/app/src/VideoIngest.php";
 require_once "/app/src/Datastore.php";
 $u = getenv("U"); $p = getenv("P");
-if (!(new MyStash\User())->create($u, $p)) { fwrite(STDERR, "create failed\n"); exit(1); }
+if (!($p = (new MyStash\User())->create($u, $p))) { fwrite(STDERR, "create failed\n"); exit(1); }
 $store = new MyStash\Datastore();
 $index = $store->loadIndex($u, $p);
 // Not the shared fixture: this check needs a conversion that is still

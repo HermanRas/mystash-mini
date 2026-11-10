@@ -47,18 +47,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'That username is already taken.';
     } elseif (!User::isValidPassword($password)) {
         $error = sprintf(
-            'Password must be at least %d characters — it is the encryption key for your whole stash, and it can never be reset.',
+            'Password must be at least %d characters — it protects your whole stash, and it can never be reset.',
             User::MIN_PASSWORD_LENGTH,
         );
     } elseif ($password !== $confirm) {
         $error = 'The passwords do not match.';
-    } elseif (!$users->create($username, $password)) {
+    } elseif (($key = $users->create($username, $password)) === null) {
         $error = 'Could not create the stash. Please try again.';
     } else {
-        // The password is the key, so log straight in with what we already have.
-        $index = (new Datastore())->loadIndex($username, $password);
+        // create() hands back the key it derived, so sign straight in with it
+        // rather than paying for Argon2id a second time.
+        $index = (new Datastore())->loadIndex($username, $key);
         if ($index !== null) {
-            Session::login($username, $password, $index);
+            Session::login($username, $key, $index);
             header('Location: wall.php');
             exit;
         }
@@ -114,9 +115,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </form>
 
     <p class="hint">
-      Your password is the encryption key for everything you store — it is never
-      saved anywhere, so if you lose it your stash cannot be recovered by anyone,
-      including you.
+      Your password is what the encryption key for everything you store is made
+      from — it is never saved anywhere, so if you lose it your stash cannot be
+      recovered by anyone, including you.
     </p>
     <p class="hint"><a href="login.html" style="color:var(--accent);"><img class="btn-icon" src="assets/img/icons/login.png" alt="">Already have a stash? Log in</a></p>
   </div>

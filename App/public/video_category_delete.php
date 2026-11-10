@@ -39,7 +39,7 @@ if (!Datastore::isValidId($id) || !$known) {
 }
 
 $categories = new VideoCategories();
-$assignments = $categories->load(Session::user(), Session::password(), $id);
+$assignments = $categories->load(Session::user(), Session::key(), $id);
 
 $removed = false;
 $assignments = array_values(array_filter(
@@ -58,8 +58,8 @@ $assignments = array_values(array_filter(
 ));
 
 if ($removed) {
-    $categories->save(Session::user(), Session::password(), $id, $assignments, $index);
-    (new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+    $categories->save(Session::user(), Session::key(), $id, $assignments, $index);
+    (new Datastore())->saveIndex(Session::user(), Session::key(), $index);
     Session::setIndex($index);
 }
 

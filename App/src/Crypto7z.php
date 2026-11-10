@@ -5,10 +5,16 @@ declare(strict_types=1);
 namespace MyStash;
 
 /**
- * Wraps the `7z` CLI for password-based AES-256 encryption only.
- * Compression is disabled (-mx=0 / store) since inputs (mp4, jpg, json)
- * are already compressed or small — recompressing wastes CPU and adds
- * decrypt-and-load latency for no size benefit.
+ * The v1 archive format (`.enc`, 7z with AES-256), kept only to READ it.
+ *
+ * Since v2.0.0 every archive is written by StashCrypto as `.epc`
+ * (Docs/v2_migration.md). The one thing that still needs 7z is MigrateV2,
+ * which opens a v1 stash once, with the password, and rewrites it as v2.
+ * encrypt() survives for the tests and dev scripts that have to build a v1
+ * stash to prove that upgrade works; nothing in the app writes `.enc` any more.
+ *
+ * Once no v1 stash is left anywhere, this class and p7zip-full in the
+ * Dockerfile can go.
  */
 final class Crypto7z
 {
@@ -17,8 +23,7 @@ final class Crypto7z
     }
 
     /**
-     * Encrypt $sourcePath into a new .7z archive at $archivePath using $password.
-     * $sourcePath may be a file or a directory.
+     * Write a v1 archive. Test and dev use only — see the class comment.
      */
     public function encrypt(string $sourcePath, string $archivePath, string $password): bool
     {
@@ -46,126 +51,9 @@ final class Crypto7z
     }
 
     /**
-     * Replaces a live archive with a freshly encrypted $sourceFile, without
-     * ever leaving the old one missing or half-written (Docs/PLAN.md 4.29).
-     *
-     * encrypt() deletes its destination before writing it, so aiming it
-     * straight at an archive that is the only copy of a video opens a window
-     * where that video does not exist at all — and if the write then fails,
-     * returns false unnoticed, or is interrupted, it never comes back. That is
-     * the bug this method exists to make unavailable.
-     *
-     * So: write beside the archive, prove the new file really opens and holds
-     * the same bytes, and only then swap it in — keeping the previous bytes as
-     * `.enc.old` until the swap has succeeded, and putting them back if
-     * anything goes wrong. The same write-verify-rotate shape Rekey uses.
-     *
-     * $sourceFile must be a single file (every caller re-encrypts one), so the
-     * verification can compare it byte for byte.
-     */
-    public function replace(string $sourceFile, string $archivePath, string $password): bool
-    {
-        if (!is_file($sourceFile)) {
-            return false;
-        }
-
-        // The pending name is unique per call: two requests saving the same
-        // archive at once would otherwise write over each other's half-built
-        // file and swap in a mixture. (They can still race on the swap itself
-        // — that is what the lock in 6.6 is for.)
-        $pending = $archivePath . '.new.' . bin2hex(random_bytes(4));
-        $backup = $archivePath . '.old';
-
-        if (!$this->encrypt($sourceFile, $pending, $password)) {
-            @unlink($pending);
-
-            return false;
-        }
-
-        // An encrypt that reported success can still have produced something
-        // that will not open — a full disk truncates happily. Checking now
-        // costs one extraction; not checking costs the video.
-        if (!$this->holdsSameBytes($pending, $sourceFile, $password)) {
-            @unlink($pending);
-
-            return false;
-        }
-
-        if (file_exists($archivePath) && !rename($archivePath, $backup)) {
-            @unlink($pending);
-
-            return false;
-        }
-
-        if (!rename($pending, $archivePath)) {
-            // Put the original back before giving up.
-            if (file_exists($backup)) {
-                rename($backup, $archivePath);
-            }
-            @unlink($pending);
-
-            return false;
-        }
-
-        if (file_exists($backup)) {
-            unlink($backup);
-        }
-
-        return true;
-    }
-
-    /**
-     * True when $archivePath decrypts to exactly one file identical to
-     * $expectedFile. Used to prove a replacement archive before it is trusted
-     * with the only copy of something.
-     */
-    private function holdsSameBytes(string $archivePath, string $expectedFile, string $password): bool
-    {
-        $scratch = $this->scratchDir();
-
-        try {
-            if (!$this->extract($archivePath, $scratch, $password)) {
-                return false;
-            }
-
-            $extracted = glob("{$scratch}/*") ?: [];
-
-            if (count($extracted) !== 1 || !is_file($extracted[0])) {
-                return false;
-            }
-
-            return filesize($extracted[0]) === filesize($expectedFile)
-                && hash_file('sha256', $extracted[0]) === hash_file('sha256', $expectedFile);
-        } finally {
-            array_map('unlink', glob("{$scratch}/*") ?: []);
-            rmdir($scratch);
-        }
-    }
-
-    /**
-     * A private tmpfs directory for verification plaintext.
-     *
-     * This deliberately does not call Datastore::tmpfsWorkDir(): Datastore
-     * depends on this class, and the dependency should not run both ways.
-     */
-    private function scratchDir(): string
-    {
-        $root = '/dev/shm/mystash-verify';
-
-        if (!is_dir($root)) {
-            mkdir($root, 0700, true);
-        }
-
-        $dir = $root . '/' . bin2hex(random_bytes(8));
-        mkdir($dir, 0700, true);
-
-        return $dir;
-    }
-
-    /**
      * Extract $archivePath (password-protected) into $destinationDir.
      * Returns false if the password is wrong or the archive is invalid —
-     * this is also how login verification works.
+     * this is how a v1 stash's password is checked before it is upgraded.
      */
     public function extract(string $archivePath, string $destinationDir, string $password): bool
     {

@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
 require_once __DIR__ . '/Datastore.php';
+require_once __DIR__ . '/StashKey.php';
 
 /**
  * Creating and validating users.
  *
- * A user is just a datastore directory plus an index archive encrypted with
- * their password — there is no account record anywhere, and no password is
- * ever stored (see Docs/SPECIFICATIONS.md §2.1).
+ * A user is just a datastore directory plus an index archive encrypted with a
+ * key derived from their password — there is no account record anywhere, and
+ * no password (or key) is ever stored (see Docs/SPECIFICATIONS.md §2.1).
  */
 final class User
 {
@@ -26,11 +26,12 @@ final class User
     private const MAX_NAME_LENGTH = 32;
 
     /**
-     * The password is the encryption key for the entire stash and is never
-     * stored, so it cannot be reset, rotated on breach, or rate-limited at the
-     * archive itself — anyone holding a copy of the .7z files can attack it
-     * offline at whatever speed their hardware allows. Length is therefore the
-     * only defence, and 24 characters is the floor.
+     * The password is what the encryption key for the entire stash is derived
+     * from, and is never stored, so it cannot be reset, rotated on breach, or
+     * rate-limited at the archive itself — anyone holding a copy of the .epc
+     * files can attack it offline. Argon2id (StashKey) makes each guess cost
+     * ~0.5 s and 256 MB, but a short password is still a small search, so
+     * length remains the first defence, and 24 characters is the floor.
      */
     public const MIN_PASSWORD_LENGTH = 24;
 
@@ -56,14 +57,20 @@ final class User
     }
 
     /**
-     * Creates the user's datastore and their initial encrypted index.
-     * Returns false if the name is invalid or already taken.
+     * Creates the user's datastore and their initial encrypted index, under a
+     * fresh key derived from $password.
+     *
+     * Returns that key (a StashKey token) so the caller can sign straight in
+     * without paying for Argon2id twice, or null if the name is invalid or
+     * already taken, or the stash could not be written.
      */
-    public function create(string $name, string $password): bool
+    public function create(string $name, string $password): ?string
     {
         if (!self::isValidName($name) || $this->exists($name) || !self::isValidPassword($password)) {
-            return false;
+            return null;
         }
+
+        $key = StashKey::create($password);
 
         // Uploads default to the "default" creator, so it must exist — with its
         // own record file, like every other creator (see CreatorStore).
@@ -76,15 +83,17 @@ final class User
             'created_at' => date('c'),
         ];
 
-        $this->datastore->saveCreatorMetadata($name, $password, '1', $default);
+        $this->datastore->saveCreatorMetadata($name, $key, '1', $default);
 
-        return $this->datastore->saveIndex($name, $password, [
+        $saved = $this->datastore->saveIndex($name, $key, [
             // "Not Converted" is assigned automatically during ingestion, so a
             // new stash needs it defined up front for the tag to resolve.
             'categories' => ['Not Converted' => '#cc4444'],
             'creators' => ['default' => $default],
             'videos' => [],
         ]);
+
+        return $saved ? $key : null;
     }
 
     /**
@@ -121,7 +130,9 @@ final class User
             return ['ok' => false, 'message' => "There is no stash called {$name}."];
         }
 
-        if ($this->datastore->loadIndex($name, $password) === null) {
+        $key = StashKey::unlock($name, $password);
+
+        if ($key === null || $this->datastore->loadIndex($name, $key) === null) {
             return [
                 'ok' => false,
                 'message' => "That password does not open {$name}'s stash — nothing was deleted.",
