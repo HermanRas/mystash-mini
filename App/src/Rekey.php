@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
+require_once __DIR__ . '/StashCrypto.php';
+require_once __DIR__ . '/StashKey.php';
 require_once __DIR__ . '/Datastore.php';
 require_once __DIR__ . '/User.php';
 
@@ -12,34 +13,41 @@ require_once __DIR__ . '/User.php';
  * Re-encrypts an entire stash with a new password
  * (Docs/SPECIFICATIONS.md §2.6, Docs/PLAN.md 6.1).
  *
- * Because the password *is* the key, changing it means rewriting every archive
- * the user owns — there is no password record to update, and nothing cheaper
- * that would work.
+ * The key is derived from the password (StashKey), so changing the password
+ * changes the key, and that means rewriting every archive the user owns —
+ * there is no password record to update, and nothing cheaper that would work.
+ * The new key gets a new salt, at the current Argon2id cost, so a re-key is
+ * also how an older stash picks up a higher cost.
  *
  * Two ordering rules make an interrupted run survivable:
  *
- *  - every archive keeps its previous bytes as `.enc.old` until the whole run
+ *  - every archive keeps its previous bytes as `.epc.old` until the whole run
  *    succeeds, so a failure part-way can put back what it replaced;
  *  - the index is rewritten LAST. While it still opens with the old password,
  *    the old password is still the stash's password, and the run can simply be
  *    retried. If the index went first, a failure would leave a stash whose
  *    index says one thing and whose media says another.
  *
- * The work itself is CPU-bound 7zip, and it runs over every video, so this can
- * take a while on a large stash. It is deliberately synchronous: the password
- * the caller holds is only valid until this returns.
+ * The work itself is a decrypt and an encrypt of every video, so this can take
+ * a while on a large stash. It is deliberately synchronous: the key the caller
+ * holds is only valid until this returns.
  */
 final class Rekey
 {
     public function __construct(
         private Datastore $datastore = new Datastore(),
-        private Crypto7z $crypto = new Crypto7z(),
+        private StashCrypto $crypto = new StashCrypto(),
     ) {
     }
 
     /**
-     * Rewrites every archive under the user's directory from $oldPassword to
-     * $newPassword.
+     * Rewrites every archive under the user's directory from $oldKey (the
+     * StashKey token the stash is on now — the session's) to a fresh key
+     * derived from $newPassword.
+     *
+     * Taking the old *key* rather than the old password is deliberate: the
+     * web flow no longer has the old password once login is over, and the job
+     * that runs this should not be handed one it does not need.
      *
      * Never throws and never exits — callers get a result they can render,
      * whether that is a CLI script or a web request.
@@ -52,7 +60,7 @@ final class Rekey
      */
     public function run(
         string $user,
-        string $oldPassword,
+        string $oldKey,
         string $newPassword,
         ?callable $onProgress = null,
     ): array {
@@ -60,16 +68,18 @@ final class Rekey
             return $this->fail('The new password must be at least ' . User::MIN_PASSWORD_LENGTH . ' characters.');
         }
 
-        if ($newPassword === $oldPassword) {
+        // The authoritative check that the key is the stash's: a wrong one
+        // simply fails to decrypt. There is nothing else to compare against,
+        // because no password or key is ever stored.
+        if ($this->datastore->loadIndex($user, $oldKey) === null) {
+            return $this->fail("Cannot decrypt {$user}'s stash with the current password — nothing changed.");
+        }
+
+        if (StashKey::matches($oldKey, $newPassword)) {
             return $this->fail('The new password is the same as the current one — nothing to do.');
         }
 
-        // The authoritative check that the caller knows the current password:
-        // a wrong one simply fails to decrypt. There is nothing else to compare
-        // against, because no password is ever stored.
-        if ($this->datastore->loadIndex($user, $oldPassword) === null) {
-            return $this->fail("Cannot decrypt {$user}'s stash with the current password — nothing changed.");
-        }
+        $newKey = StashKey::create($newPassword);
 
         $archives = $this->archivesFor($user);
 
@@ -83,7 +93,7 @@ final class Rekey
             $workDir = Datastore::tmpfsWorkDir('rekey');
 
             try {
-                if (!$this->crypto->extract($archive, $workDir, $oldPassword)) {
+                if (!$this->crypto->extract($archive, $workDir, $oldKey)) {
                     return $this->abort($rewritten, 'Failed to decrypt ' . basename($archive));
                 }
 
@@ -94,7 +104,7 @@ final class Rekey
 
                 rename($archive, "{$archive}.old");
 
-                if (!$this->crypto->encrypt($plain, $archive, $newPassword)) {
+                if (!$this->crypto->encrypt($plain, $archive, $newKey)) {
                     rename("{$archive}.old", $archive);
 
                     return $this->abort($rewritten, 'Failed to re-encrypt ' . basename($archive));
@@ -125,7 +135,10 @@ final class Rekey
     }
 
     /**
-     * Every `.enc` archive the user owns, index last.
+     * Every `.epc` archive the user owns, index last.
+     *
+     * Leftover v1 `.enc` files are not touched: a stash only reaches this once
+     * MigrateV2 has finished with it.
      *
      * @return list<string>
      */
@@ -143,7 +156,7 @@ final class Rekey
         );
 
         foreach ($iterator as $file) {
-            if ($file->isFile() && str_ends_with($file->getPathname(), '.enc')) {
+            if ($file->isFile() && str_ends_with($file->getPathname(), StashCrypto::EXTENSION)) {
                 $archives[] = $file->getPathname();
             }
         }

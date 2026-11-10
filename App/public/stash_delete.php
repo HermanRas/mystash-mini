@@ -5,9 +5,11 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Session.php';
 require_once __DIR__ . '/../src/User.php';
 require_once __DIR__ . '/../src/Jobs.php';
+require_once __DIR__ . '/../src/StashKey.php';
 
 use MyStash\Jobs;
 use MyStash\Session;
+use MyStash\StashKey;
 use MyStash\User;
 
 /**
@@ -43,10 +45,11 @@ if (!hash_equals($user, $typedName)) {
     $back('error=name');
 }
 
-// The password this session proved at login. User::delete() then re-proves it
+// The session holds only the key, so the typed password is checked by deriving
+// it again and comparing (StashKey::matches). User::delete() then re-proves it
 // the only authoritative way — by decrypting the index — before anything is
 // removed.
-if (!hash_equals(Session::password(), $password)) {
+if (!StashKey::matches(Session::key(), $password)) {
     $back('error=wrong');
 }
 

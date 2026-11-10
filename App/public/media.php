@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/Session.php';
 
-use MyStash\Crypto7z;
+use MyStash\StashCrypto;
 use MyStash\Datastore;
 use MyStash\Session;
 
@@ -25,8 +25,8 @@ use MyStash\CreatorStore;
  * With `&download=1` the same bytes are sent as an attachment instead of
  * inline, which is how a video gets back out of the stash (Docs/PLAN.md 4.30).
  * Uploading with no way to retrieve was an oversight: the archives are only
- * openable with the password, so without this the only way out was 7zip on the
- * command line.
+ * openable with the password, so without this the only way out was the command
+ * line (tools/decode.php, since v2).
  */
 
 Session::requireLogin();
@@ -38,13 +38,13 @@ $download = isset($_GET['download']);
 // Appended to the id to name the archive. `trim` is the copy a trim makes for
 // the user to play before deciding whether to keep it (VideoTrim).
 $suffixes = [
-    'thumb' => ['.jpg.preview.enc', 'image/jpeg'],
-    'preview' => ['.mp4.preview.enc', 'video/mp4'],
-    'video' => ['.mp4.enc', 'video/mp4'],
-    'trim' => ['_trim.mp4.enc', 'video/mp4'],
+    'thumb' => ['.jpg.preview.epc', 'image/jpeg'],
+    'preview' => ['.mp4.preview.epc', 'video/mp4'],
+    'video' => ['.mp4.epc', 'video/mp4'],
+    'trim' => ['_trim.mp4.epc', 'video/mp4'],
     // A picture's original. The real Content-Type is decided below from the
     // extension the archive holds, which PictureIngest chose from the bytes.
-    'picture' => ['.img.enc', 'application/octet-stream'],
+    'picture' => ['.img.epc', 'application/octet-stream'],
 ];
 
 if ($type === 'avatar') {
@@ -78,8 +78,8 @@ if (!file_exists($archivePath)) {
 $workDir = Datastore::tmpfsWorkDir('media');
 register_shutdown_function(static fn() => Datastore::wipe($workDir));
 
-$crypto = new Crypto7z();
-if (!$crypto->extract($archivePath, $workDir, Session::password())) {
+$crypto = new StashCrypto();
+if (!$crypto->extract($archivePath, $workDir, Session::key())) {
     http_response_code(403);
     exit;
 }

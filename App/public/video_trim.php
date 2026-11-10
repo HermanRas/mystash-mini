@@ -15,7 +15,7 @@ use MyStash\VideoTrim;
  * trimmed copy one made (see VideoTrim).
  *
  *  - `action=start` checks the range and starts a convert job carrying it.
- *    The job writes `{ID}_trim.mp4.enc`; the video itself is not touched.
+ *    The job writes `{ID}_trim.mp4.epc`; the video itself is not touched.
  *  - `action=keep` swaps the trimmed copy in for the video, then starts a
  *    preview job, because the hover clip is still a timelapse of the old one.
  *  - `action=delete` throws the trimmed copy away.
@@ -103,7 +103,7 @@ if ($action === 'start') {
         'convert',
         $user,
         $id,
-        ['password' => Session::password()],
+        ['key' => Session::key()],
         [
             'message' => 'Starting…',
             'trim_mode' => $spec['mode'],
@@ -122,7 +122,7 @@ if ($action === 'start') {
 $trim = new VideoTrim();
 
 if ($action === 'keep') {
-    $result = $trim->keep($user, Session::password(), $id);
+    $result = $trim->keep($user, Session::key(), $id);
 
     // Once the swap has happened the hover clip shows the old video, whatever
     // the bookkeeping after it managed — so rebuild it whenever the copy has
@@ -132,7 +132,7 @@ if ($action === 'keep') {
             'preview',
             $user,
             $id,
-            ['password' => Session::password()],
+            ['key' => Session::key()],
             $result['frame_at'] !== null ? ['frame_at' => $result['frame_at']] : [],
         );
     }
@@ -141,7 +141,7 @@ if ($action === 'keep') {
 }
 
 if ($action === 'delete') {
-    $result = $trim->discard($user, Session::password(), $id);
+    $result = $trim->discard($user, Session::key(), $id);
     $toStats(($result['ok'] ? 'trim=' : 'trim_error=') . urlencode($result['message']));
 }
 

@@ -52,7 +52,7 @@ if ($id !== '') {
     $redirect = 'playlist.php?id=' . urlencode($new);
 }
 
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+(new Datastore())->saveIndex(Session::user(), Session::key(), $index);
 Session::setIndex($index);
 
 header('Location: ' . $redirect);

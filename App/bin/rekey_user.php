@@ -14,8 +14,10 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/../src/Rekey.php';
+require_once __DIR__ . '/../src/StashKey.php';
 
 use MyStash\Rekey;
+use MyStash\StashKey;
 
 [$user, $oldPassword, $newPassword] = [$argv[1] ?? '', $argv[2] ?? '', $argv[3] ?? ''];
 
@@ -24,9 +26,17 @@ if ($user === '' || $oldPassword === '' || $newPassword === '') {
     exit(1);
 }
 
+// Rekey works from the stash's current KEY, as the web flow does.
+$oldKey = StashKey::unlock($user, $oldPassword);
+
+if ($oldKey === null) {
+    fwrite(STDERR, "{$user} has no v2 stash to re-key. A v1 stash must be upgraded first: php bin/migrate_v2.php {$user}\n");
+    exit(1);
+}
+
 $result = (new Rekey())->run(
     $user,
-    $oldPassword,
+    $oldKey,
     $newPassword,
     static fn(int $done, int $total, string $name) => print("re-encrypted {$done}/{$total}  {$name}\n"),
 );

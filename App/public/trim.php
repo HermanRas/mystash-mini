@@ -52,7 +52,7 @@ $lengthLabel = $durationMs !== null
 
 // What the copy is, from the video's metadata. Only opened when there is one.
 $trim = $hasTrim
-    ? ((new Datastore())->loadVideoMetadata($user, Session::password(), $id)['trim'] ?? null)
+    ? ((new Datastore())->loadVideoMetadata($user, Session::key(), $id)['trim'] ?? null)
     : null;
 
 $error = (string) ($_GET['error'] ?? '');

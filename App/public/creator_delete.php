@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/Session.php';
 require_once __DIR__ . '/../src/CreatorStore.php';
@@ -32,6 +32,6 @@ $index = Session::refreshIndex();
 (new CreatorStore())->delete(Session::user(), $index, $name);
 
 Session::setIndex($index);
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+(new Datastore())->saveIndex(Session::user(), Session::key(), $index);
 
 header('Location: creator.php');

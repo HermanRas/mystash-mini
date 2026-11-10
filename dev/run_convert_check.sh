@@ -21,9 +21,9 @@ fails=0
 check() { if [ "$2" = "0" ]; then echo "PASS: $1"; else echo "FAIL: $1"; fails=$((fails+1)); fi; }
 
 cleanup() {
-  # A worker still running would recreate part of what is about to be removed:
-  # 7zip creates missing parent directories, so a convert finishing after the
-  # rm leaves a half-resurrected stash behind. That has actually happened here.
+  # A worker still running could write into what is about to be removed — in
+  # v1, 7zip created missing parent directories, so a convert finishing after
+  # the rm left a half-resurrected stash behind. That actually happened here.
   for _ in $(seq 1 60); do
     running=$(docker compose exec -T -u www-data app sh -c 'pgrep -fc "[j]ob_worker" || true' | tr -d "\r")
     [ "${running:-0}" = "0" ] && break
@@ -45,7 +45,7 @@ require_once "/app/src/VideoCategories.php";
 require_once "/app/src/VideoIngest.php";
 require_once "/app/src/Datastore.php";
 $u = getenv("U"); $p = getenv("P");
-if (!(new MyStash\User())->create($u, $p)) { fwrite(STDERR, "create failed\n"); exit(1); }
+if (!($p = (new MyStash\User())->create($u, $p))) { fwrite(STDERR, "create failed\n"); exit(1); }
 $store = new MyStash\Datastore();
 $index = $store->loadIndex($u, $p);
 // A .mov container makes it "Not Converted" whatever its codec, so the
@@ -59,9 +59,10 @@ echo "ingested video {$entry["id"]}, not_converted=", var_export($entry["not_con
 
 # The bytes we must still have afterwards, whatever happens.
 BEFORE=$(docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
-require_once "/app/src/Crypto7z.php";
-$c = new MyStash\Crypto7z();
-$c->extract("/app/Data/" . getenv("U") . "/videos/Video1/1.mp4.enc", "/dev/shm/before", getenv("P"));
+require_once "/app/src/StashCrypto.php";
+require_once "/app/src/StashKey.php";
+$c = new MyStash\StashCrypto();
+$c->extract("/app/Data/" . getenv("U") . "/videos/Video1/1.mp4.epc", "/dev/shm/before", MyStash\StashKey::unlock(getenv("U"), getenv("P")));
 echo hash_file("sha256", glob("/dev/shm/before/*")[0]);
 array_map("unlink", glob("/dev/shm/before/*")); rmdir("/dev/shm/before");
 ')
@@ -111,13 +112,14 @@ echo "  job ended in state '${STATE}', highest reported progress ${PEAK}%"
 
 # --- the video must still be there, and now be MP4/H.265 ------------------
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" -e B="$BEFORE" app php -r '
-require_once "/app/src/Crypto7z.php";
+require_once "/app/src/StashCrypto.php";
+require_once "/app/src/StashKey.php";
 require_once "/app/src/VideoEncoder.php";
 require_once "/app/src/Datastore.php";
-$u = getenv("U"); $p = getenv("P");
+$u = getenv("U"); $p = MyStash\StashKey::unlock($u, getenv("P"));
 $dir = "/app/Data/{$u}/videos/Video1";
-$c = new MyStash\Crypto7z();
-$ok = $c->extract("{$dir}/1.mp4.enc", "/dev/shm/after", $p);
+$c = new MyStash\StashCrypto();
+$ok = $c->extract("{$dir}/1.mp4.epc", "/dev/shm/after", $p);
 $file = $ok ? (glob("/dev/shm/after/*")[0] ?? null) : null;
 printf("%s: the video archive still decrypts\n", $file !== null ? "PASS" : "FAIL");
 if ($file !== null) {

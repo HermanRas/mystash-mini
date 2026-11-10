@@ -4,16 +4,20 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
 require_once __DIR__ . '/Datastore.php';
 require_once __DIR__ . '/Jobs.php';
 
 /**
  * Starts a PHP session backed by tmpfs (/dev/shm) instead of the default
- * on-disk session save path. The session carries the user's password for
- * the duration of the login (needed to decrypt/re-encrypt on demand) —
- * it must never touch a persistent disk, only RAM-backed storage that is
- * gone on container restart.
+ * on-disk session save path. The session carries the stash KEY for the
+ * duration of the login (needed to decrypt/re-encrypt on demand) — it must
+ * never touch a persistent disk, only RAM-backed storage that is gone on
+ * container restart.
+ *
+ * Since v2 it holds the key derived from the password (StashKey), never the
+ * password itself. Someone who reads a session file can open that stash while
+ * the key is unchanged — that is unavoidable — but does not learn the
+ * password, which may well be in use somewhere else too.
  */
 final class Session
 {
@@ -36,17 +40,45 @@ final class Session
     {
         self::start();
 
-        return isset($_SESSION['user'], $_SESSION['password']);
+        return isset($_SESSION['user'], $_SESSION['key']);
     }
 
-    public static function login(string $user, string $password, array $index): void
+    /**
+     * @param string $key the StashKey token the index was just opened with
+     */
+    public static function login(string $user, string $key, array $index): void
     {
         self::start();
         session_regenerate_id(true);
 
+        $_SESSION = [];
         $_SESSION['user'] = $user;
-        $_SESSION['password'] = $password;
+        $_SESSION['key'] = $key;
         $_SESSION['index'] = $index;
+    }
+
+    /**
+     * Marks this browser as the one watching $user's v1 → v2 upgrade
+     * (login.php → upgrade.php). Not a login: the session holds no key, and
+     * every page but upgrade.php still sends it to the login form. It only
+     * lets upgrade.php know whose job to show without taking a name from the
+     * request.
+     */
+    public static function beginUpgrade(string $user): void
+    {
+        self::start();
+        session_regenerate_id(true);
+
+        $_SESSION = ['upgrading' => $user];
+    }
+
+    public static function upgradingUser(): ?string
+    {
+        self::start();
+
+        $user = $_SESSION['upgrading'] ?? null;
+
+        return is_string($user) ? $user : null;
     }
 
     public static function logout(): void
@@ -80,10 +112,10 @@ final class Session
      * practice, locked to the Profile screen showing its progress.
      *
      * Making the re-key a background job (Docs/PLAN.md 6.6) reopened the
-     * failure 6.5 was written about. The session holds the *old* password; the
+     * failure 6.5 was written about. The session holds the *old* key; the
      * worker is moving every archive onto the new one, index last. A page load
      * in the middle still decrypts fine (the index is still on the old key) and
-     * would happily write something back under the old password — landing that
+     * would happily write something back under the old key — landing that
      * archive on a key the rest of the stash has already left. That is exactly
      * the split-key state that once had to be repaired by hand.
      *
@@ -106,9 +138,10 @@ final class Session
         return $_SESSION['user'];
     }
 
-    public static function password(): string
+    /** The StashKey token every archive in this stash is encrypted under. */
+    public static function key(): string
     {
-        return $_SESSION['password'];
+        return $_SESSION['key'];
     }
 
     public static function index(): array
@@ -122,25 +155,6 @@ final class Session
     }
 
     /**
-     * Adopts a new password after the stash has been re-keyed under it
-     * (Docs/PLAN.md 6.1), so the session keeps working instead of being
-     * logged out by refreshIndex() the moment the old key stops opening
-     * anything.
-     *
-     * Only ever call this once the re-key has actually succeeded — a session
-     * holding a password the archives are not on is exactly the split-key
-     * state refreshIndex() exists to catch.
-     */
-    public static function setPassword(string $password): void
-    {
-        self::start();
-        // The password changed, so treat it as a fresh authentication.
-        session_regenerate_id(true);
-
-        $_SESSION['password'] = $password;
-    }
-
-    /**
      * Re-reads the index from disk and refreshes the session copy.
      *
      * Every page and endpoint must start from this rather than the snapshot
@@ -149,10 +163,10 @@ final class Session
      * another session (which is exactly how a deleted video reappeared on the
      * wall once).
      *
-     * If the index no longer decrypts, the session's password is stale — the
+     * If the index no longer decrypts, the session's key is stale — the
      * stash was re-keyed elsewhere while this session was open. The session is
      * ended rather than allowed to continue: every write re-encrypts with the
-     * password the session holds, so carrying on would rewrite the index and
+     * key the session holds, so carrying on would rewrite the index and
      * creator records under the *old* key and leave the stash split across two
      * passwords, with some archives opening under neither in practice. That is
      * not hypothetical — it happened once, after `bin/rekey_user.php` ran while
@@ -160,7 +174,7 @@ final class Session
      */
     public static function refreshIndex(): array
     {
-        $index = (new Datastore())->loadIndex(self::user(), self::password());
+        $index = (new Datastore())->loadIndex(self::user(), self::key());
 
         if ($index === null) {
             self::logout();

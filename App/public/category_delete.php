@@ -29,7 +29,7 @@ $index = Session::refreshIndex();
 // already tagged with it keep their tags.
 unset($index['categories'][$name]);
 
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+(new Datastore())->saveIndex(Session::user(), Session::key(), $index);
 Session::setIndex($index);
 
 header('Location: category.php');

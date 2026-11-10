@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
+require_once __DIR__ . '/StashCrypto.php';
 require_once __DIR__ . '/Datastore.php';
 require_once __DIR__ . '/VideoEncoder.php';
 
@@ -20,14 +20,14 @@ require_once __DIR__ . '/VideoEncoder.php';
  * Three things this has to get right:
  *
  *  - **Never overwrite the only copy.** The preview lives in exactly one
- *    place, `{ID}.jpg.preview.enc`, so it goes through `Crypto7z::replace()`
+ *    place, `{ID}.jpg.preview.epc`, so it goes through `StashCrypto::replace()`
  *    (4.29) rather than `encrypt()` — the new image is written beside the old
  *    one, verified, and only then swapped in. A failed re-preview leaves the
  *    tile exactly as it was.
  *
  *  - **Store what the filename claims.** Whatever is uploaded — PNG, WebP,
  *    whatever the phone produced — is re-encoded to JPEG, because the archive
- *    is named `.jpg.preview.enc` and `media.php` serves it as `image/jpeg`.
+ *    is named `.jpg.preview.epc` and `media.php` serves it as `image/jpeg`.
  *    The same rule the creator avatars follow (4.10).
  *
  *  - **Never serve back the bytes that were uploaded.** What is stored is
@@ -56,7 +56,7 @@ final class VideoPreview
 
     public function __construct(
         private VideoEncoder $encoder = new VideoEncoder(),
-        private Crypto7z $crypto = new Crypto7z(),
+        private StashCrypto $crypto = new StashCrypto(),
         private Datastore $datastore = new Datastore(),
     ) {
     }
@@ -72,13 +72,13 @@ final class VideoPreview
      *
      * @return array{ok: bool, message: string}
      */
-    public function fromTimestamp(string $user, string $password, string $id, float $seconds): array
+    public function fromTimestamp(string $user, string $key, string $id, float $seconds): array
     {
         if ($seconds < 0 || !is_finite($seconds)) {
             return ['ok' => false, 'message' => 'That is not a valid timestamp.'];
         }
 
-        $videoArchive = Datastore::videoDir($user, $id) . "/{$id}.mp4.enc";
+        $videoArchive = Datastore::videoDir($user, $id) . "/{$id}.mp4.epc";
 
         if (!is_file($videoArchive)) {
             return ['ok' => false, 'message' => 'There is no video file to take a frame from.'];
@@ -87,7 +87,7 @@ final class VideoPreview
         $workDir = Datastore::tmpfsWorkDir('preview');
 
         try {
-            if (!$this->crypto->extract($videoArchive, $workDir, $password)) {
+            if (!$this->crypto->extract($videoArchive, $workDir, $key)) {
                 return ['ok' => false, 'message' => 'The video could not be opened.'];
             }
 
@@ -115,14 +115,14 @@ final class VideoPreview
                 return ['ok' => false, 'message' => 'No frame could be captured at that point.'];
             }
 
-            return $this->store($user, $password, $id, $framePath, $seconds);
+            return $this->store($user, $key, $id, $framePath, $seconds);
         } finally {
             Datastore::wipe($workDir);
         }
     }
 
     /**
-     * Builds the hover timelapse clip, `{ID}.mp4.preview.enc`, from the stored
+     * Builds the hover timelapse clip, `{ID}.mp4.preview.epc`, from the stored
      * video.
      *
      * This used to happen inside the upload request, and it is the slowest
@@ -143,13 +143,13 @@ final class VideoPreview
      */
     public function buildClip(
         string $user,
-        string $password,
+        string $key,
         string $id,
         ?callable $onStage = null,
         ?float $frameAt = null,
     ): array {
         $videoDir = Datastore::videoDir($user, $id);
-        $videoArchive = "{$videoDir}/{$id}.mp4.enc";
+        $videoArchive = "{$videoDir}/{$id}.mp4.epc";
 
         if (!is_file($videoArchive)) {
             return ['ok' => false, 'message' => 'There is no video file to build a preview from.'];
@@ -162,7 +162,7 @@ final class VideoPreview
 
             $extractDir = "{$workDir}/extract";
 
-            if (!$this->crypto->extract($videoArchive, $extractDir, $password)) {
+            if (!$this->crypto->extract($videoArchive, $extractDir, $key)) {
                 return ['ok' => false, 'message' => 'The video could not be opened.'];
             }
 
@@ -178,7 +178,7 @@ final class VideoPreview
                 $framePath = "{$workDir}/preview.jpg";
 
                 if (!$this->encoder->extractFrame($video, $framePath, $frameAt)
-                    || $this->store($user, $password, $id, $framePath, $frameAt)['ok'] !== true) {
+                    || $this->store($user, $key, $id, $framePath, $frameAt)['ok'] !== true) {
                     error_log("MyStash preview: could not retake the thumbnail of {$id} at {$frameAt}s");
                 }
             }
@@ -194,16 +194,17 @@ final class VideoPreview
             $onStage && $onStage('Encrypting…');
 
             // The video may have been deleted while the clip was being built.
-            // 7z creates missing parent directories, so writing regardless
-            // would bring back a directory holding nothing but a preview —
-            // invisible to every screen and impossible to delete from one.
+            // Checked rather than left to the write failing: v1's 7z created
+            // missing parent directories, and bringing back a directory holding
+            // nothing but a preview — invisible to every screen, impossible to
+            // delete from one — is not a mistake to leave to the crypto layer.
             if (!is_dir($videoDir)) {
                 return ['ok' => false, 'message' => 'The video was deleted before its preview was ready.'];
             }
 
             // replace(), so a rebuild over an existing clip never leaves the
             // tile without one if it fails part way (4.29).
-            if (!$this->crypto->replace($clipPath, "{$videoDir}/{$id}.mp4.preview.enc", $password)) {
+            if (!$this->crypto->replace($clipPath, "{$videoDir}/{$id}.mp4.preview.epc", $key)) {
                 return ['ok' => false, 'message' => 'The preview could not be saved.'];
             }
 
@@ -218,7 +219,7 @@ final class VideoPreview
      *
      * @return array{ok: bool, message: string}
      */
-    public function fromUpload(string $user, string $password, string $id, string $uploadedTmpPath): array
+    public function fromUpload(string $user, string $key, string $id, string $uploadedTmpPath): array
     {
         $workDir = Datastore::tmpfsWorkDir('preview');
 
@@ -240,7 +241,7 @@ final class VideoPreview
             // null, not a number: the preview no longer corresponds to any
             // point in the video, and recording the timestamp it *used* to be
             // taken from would be a lie the edit screen then displays.
-            return $this->store($user, $password, $id, $jpgPath, null);
+            return $this->store($user, $key, $id, $jpgPath, null);
         } finally {
             Datastore::wipe($workDir);
         }
@@ -254,28 +255,28 @@ final class VideoPreview
      */
     private function store(
         string $user,
-        string $password,
+        string $key,
         string $id,
         string $jpgPath,
         ?float $capturedAt,
     ): array {
-        $archive = Datastore::videoDir($user, $id) . "/{$id}.jpg.preview.enc";
+        $archive = Datastore::videoDir($user, $id) . "/{$id}.jpg.preview.epc";
 
         // replace(), never encrypt(): encrypt() removes its destination before
         // writing, so a failure part way through would leave the video with no
         // preview at all rather than the one it already had (4.29).
-        if (!$this->crypto->replace($jpgPath, $archive, $password)) {
+        if (!$this->crypto->replace($jpgPath, $archive, $key)) {
             return ['ok' => false, 'message' => 'The new preview could not be saved. The old one is unchanged.'];
         }
 
         // Bookkeeping only. If this fails the preview is already correctly
         // stored, so the user is not told the operation failed — the worst
         // case is an edit screen showing a stale capture point.
-        $metadata = $this->datastore->loadVideoMetadata($user, $password, $id);
+        $metadata = $this->datastore->loadVideoMetadata($user, $key, $id);
 
         if ($metadata !== null) {
             $metadata['preview_capture_seconds'] = $capturedAt;
-            $this->datastore->saveVideoMetadata($user, $password, $id, $metadata);
+            $this->datastore->saveVideoMetadata($user, $key, $id, $metadata);
         }
 
         return [

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
+require_once __DIR__ . '/StashCrypto.php';
 require_once __DIR__ . '/Datastore.php';
 require_once __DIR__ . '/VideoEncoder.php';
 require_once __DIR__ . '/VideoCreators.php';
@@ -13,8 +13,8 @@ require_once __DIR__ . '/VideoCreators.php';
  * Creator records, stored the same way videos are: an encrypted per-creator
  * file holding the authoritative details, plus an encrypted profile picture.
  *
- *   App/Data/{user}/creators/Creator{ID}/{ID}.json.enc
- *   App/Data/{user}/creators/Creator{ID}/{ID}.profile.png.enc
+ *   App/Data/{user}/creators/Creator{ID}/{ID}.json.epc
+ *   App/Data/{user}/creators/Creator{ID}/{ID}.profile.png.epc
  *
  * The index keeps a denormalized copy of each creator (name, age, gender,
  * id) so the wall and its filter panel can render without decrypting
@@ -28,7 +28,7 @@ final class CreatorStore
 {
     public function __construct(
         private Datastore $datastore = new Datastore(),
-        private Crypto7z $crypto = new Crypto7z(),
+        private StashCrypto $crypto = new StashCrypto(),
         private VideoEncoder $encoder = new VideoEncoder(),
     ) {
     }
@@ -37,7 +37,7 @@ final class CreatorStore
      * Full details for a creator, read from their own archive and falling back
      * to the index copy for records written before creator files existed.
      */
-    public function load(string $user, string $password, array $index, string $name): ?array
+    public function load(string $user, string $key, array $index, string $name): ?array
     {
         $summary = $index['creators'][$name] ?? null;
         if ($summary === null) {
@@ -45,7 +45,7 @@ final class CreatorStore
         }
 
         $id = (string) ($summary['id'] ?? '');
-        $record = $id !== '' ? $this->datastore->loadCreatorMetadata($user, $password, $id) : null;
+        $record = $id !== '' ? $this->datastore->loadCreatorMetadata($user, $key, $id) : null;
 
         return $record ?? $summary;
     }
@@ -57,7 +57,7 @@ final class CreatorStore
      * $originalName renames: the index key moves and every video referencing
      * the old name is repointed, but the ID and its directory stay put.
      */
-    public function save(string $user, string $password, array &$index, array $record, string $originalName = ''): array
+    public function save(string $user, string $key, array &$index, array $record, string $originalName = ''): array
     {
         $name = $record['name'];
         $existing = $index['creators'][$originalName !== '' ? $originalName : $name] ?? [];
@@ -87,17 +87,17 @@ final class CreatorStore
             'bio' => $record['bio'],
         ];
 
-        $this->datastore->saveCreatorMetadata($user, $password, $id, $record);
+        $this->datastore->saveCreatorMetadata($user, $key, $id, $record);
 
         return $record;
     }
 
     /**
      * Stores an uploaded profile picture as the encrypted
-     * Creator{ID}/{ID}.profile.png.enc. Whatever was uploaded is normalised to
+     * Creator{ID}/{ID}.profile.png.epc. Whatever was uploaded is normalised to
      * PNG first, so the stored name always describes the actual bytes.
      */
-    public function saveProfileImage(string $user, string $password, string $id, string $uploadedTmpPath): bool
+    public function saveProfileImage(string $user, string $key, string $id, string $uploadedTmpPath): bool
     {
         $workDir = Datastore::tmpfsWorkDir('creator');
 
@@ -117,7 +117,7 @@ final class CreatorStore
                 mkdir($dir, 0700, true);
             }
 
-            return $this->crypto->encrypt($pngPath, "{$dir}/{$id}.profile.png.enc", $password);
+            return $this->crypto->encrypt($pngPath, "{$dir}/{$id}.profile.png.epc", $key);
         } finally {
             Datastore::wipe($workDir);
         }
@@ -125,7 +125,7 @@ final class CreatorStore
 
     public static function profileImagePath(string $user, string $id): string
     {
-        return Datastore::creatorDir($user, $id) . "/{$id}.profile.png.enc";
+        return Datastore::creatorDir($user, $id) . "/{$id}.profile.png.epc";
     }
 
     public static function hasProfileImage(string $user, string $id): bool

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
 require_once __DIR__ . '/../src/VideoEncoder.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/Jobs.php';
@@ -109,8 +109,8 @@ foreach ($files as $file) {
     // message it wrote says why, which "upload failed" would not.
     try {
         $entry = $isPicture
-            ? (new PictureIngest())->ingest(Session::user(), Session::password(), $file['tmp_name'], $name, $index)
-            : (new VideoIngest())->ingest(Session::user(), Session::password(), $file['tmp_name'], $name, $index, $previewAt);
+            ? (new PictureIngest())->ingest(Session::user(), Session::key(), $file['tmp_name'], $name, $index)
+            : (new VideoIngest())->ingest(Session::user(), Session::key(), $file['tmp_name'], $name, $index, $previewAt);
     } catch (\RuntimeException $e) {
         // A file that is neither a picture we know nor a video ffmpeg can read
         // is usually not media at all — a failed download saved as .jpg is
@@ -123,7 +123,7 @@ foreach ($files as $file) {
     }
 
     $index['videos'][] = $entry;
-    (new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+    (new Datastore())->saveIndex(Session::user(), Session::key(), $index);
     Session::setIndex($index);
     $added[] = ['id' => $entry['id'], 'title' => $entry['title'], 'kind' => $isPicture ? 'picture' : 'video'];
 
@@ -134,7 +134,7 @@ foreach ($files as $file) {
             'preview',
             Session::user(),
             (string) $entry['id'],
-            ['password' => Session::password()],
+            ['key' => Session::key()],
             ['message' => 'Starting…'],
         );
 

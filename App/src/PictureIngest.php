@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
+require_once __DIR__ . '/StashCrypto.php';
 require_once __DIR__ . '/Datastore.php';
 require_once __DIR__ . '/VideoEncoder.php';
 require_once __DIR__ . '/VideoCreators.php';
@@ -15,9 +15,9 @@ require_once __DIR__ . '/VideoPreview.php';
  * `kind: picture`, stored in the same Video{ID}/ directory so that delete,
  * re-key and playlists treat it exactly as they treat a video:
  *
- *   {ID}.img.enc          the original file, byte for byte
- *   {ID}.jpg.preview.enc  a JPEG scaled to fit 1280px, the wall tile
- *   {ID}.json.enc         metadata
+ *   {ID}.img.epc          the original file, byte for byte
+ *   {ID}.jpg.preview.epc  a JPEG scaled to fit 1280px, the wall tile
+ *   {ID}.json.epc         metadata
  *
  * The original is kept as uploaded (an animated GIF stays animated) but only
  * ever served with one of the content types in TYPES, decided from the file's
@@ -49,7 +49,7 @@ final class PictureIngest
 
     public function __construct(
         private VideoEncoder $encoder = new VideoEncoder(),
-        private Crypto7z $crypto = new Crypto7z(),
+        private StashCrypto $crypto = new StashCrypto(),
     ) {
     }
 
@@ -66,7 +66,7 @@ final class PictureIngest
      */
     public function ingest(
         string $user,
-        string $password,
+        string $key,
         string $uploadedTmpPath,
         string $originalFilename,
         array $index,
@@ -128,9 +128,9 @@ final class PictureIngest
             $metadataPath = "{$workDir}/{$id}.json";
             file_put_contents($metadataPath, json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-            $this->crypto->encrypt($finalOriginal, "{$dir}/{$id}.img.enc", $password);
-            $this->crypto->encrypt($thumbPath, "{$dir}/{$id}.jpg.preview.enc", $password);
-            $this->crypto->encrypt($metadataPath, "{$dir}/{$id}.json.enc", $password);
+            $this->crypto->encrypt($finalOriginal, "{$dir}/{$id}.img.epc", $key);
+            $this->crypto->encrypt($thumbPath, "{$dir}/{$id}.jpg.preview.epc", $key);
+            $this->crypto->encrypt($metadataPath, "{$dir}/{$id}.json.epc", $key);
 
             $claimedDir = null;
 

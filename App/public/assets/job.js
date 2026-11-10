@@ -9,6 +9,10 @@
  *
  * data-done-url is where to go when the job *succeeds*; a failure just reloads
  * the page it is on, so the error is shown in place.
+ *
+ * data-status-url, when present, is polled instead of job_status.php. The v1 →
+ * v2 upgrade page needs it: that job runs before anyone is signed in, so
+ * job_status.php — which requires a login — cannot answer for it.
  */
 (function () {
   const card = document.getElementById('job-card');
@@ -17,9 +21,9 @@
   const bar = document.getElementById('job-bar');
   const message = document.getElementById('job-message');
 
-  const url = 'job_status.php'
+  const url = card.dataset.statusUrl || ('job_status.php'
     + '?kind=' + encodeURIComponent(card.dataset.kind)
-    + '&target=' + encodeURIComponent(card.dataset.target || '');
+    + '&target=' + encodeURIComponent(card.dataset.target || ''));
 
   // A job started moments ago may not have a record yet, and a finished one is
   // eventually pruned. Neither is an error on its own; both are, if they

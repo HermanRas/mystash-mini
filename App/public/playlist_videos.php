@@ -61,7 +61,7 @@ $posted = is_array($posted) ? $posted : [];
 
 Playlists::setVideos($index, $id, $posted, $known);
 
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+(new Datastore())->saveIndex(Session::user(), Session::key(), $index);
 Session::setIndex($index);
 
 if ($wantsJson) {

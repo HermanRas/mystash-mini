@@ -6,7 +6,7 @@ declare(strict_types=1);
  * The background worker behind every long job (Docs/PLAN.md 4.28, 6.6).
  *
  * Spawned detached by Jobs::start() with nothing but a job id on its argv. It
- * takes the passwords out of the job's tmpfs key file (deleting it as it
+ * takes the keys out of the job's tmpfs key file (deleting it as it
  * reads), does the work, and reports progress into the job record for the
  * browser to poll. It has no session, no output and no request behind it — the
  * user may well have closed the tab, and the job carries on regardless, which
@@ -16,7 +16,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/../src/Jobs.php';
-require_once __DIR__ . '/../src/Crypto7z.php';
+require_once __DIR__ . '/../src/StashCrypto.php';
+require_once __DIR__ . '/../src/MigrateV2.php';
 require_once __DIR__ . '/../src/Datastore.php';
 require_once __DIR__ . '/../src/Rekey.php';
 require_once __DIR__ . '/../src/VideoCategories.php';
@@ -26,7 +27,8 @@ require_once __DIR__ . '/../src/VideoQuality.php';
 require_once __DIR__ . '/../src/VideoStats.php';
 require_once __DIR__ . '/../src/VideoTrim.php';
 
-use MyStash\Crypto7z;
+use MyStash\StashCrypto;
+use MyStash\MigrateV2;
 use MyStash\Datastore;
 use MyStash\Jobs;
 use MyStash\Rekey;
@@ -74,6 +76,7 @@ try {
             ? runTrim($id, $record, $secrets)
             : runConvert($id, $record, $secrets),
         'rekey' => runRekey($id, $record, $secrets),
+        'upgrade' => runUpgrade($id, $record, $secrets),
         'preview' => runPreview($id, $record, $secrets),
         default => Jobs::finish($id, false, 'Unknown job type.'),
     };
@@ -108,9 +111,9 @@ function runConvert(string $id, array $record, array $secrets): void
 {
     $user = (string) $record['user'];
     $videoId = (string) $record['target'];
-    $password = (string) $secrets['password'];
+    $key = (string) $secrets['key'];
 
-    $archivePath = Datastore::videoDir($user, $videoId) . "/{$videoId}.mp4.enc";
+    $archivePath = Datastore::videoDir($user, $videoId) . "/{$videoId}.mp4.epc";
 
     if (!file_exists($archivePath)) {
         Jobs::finish($id, false, 'There is no encrypted video file behind this entry to convert.');
@@ -118,7 +121,7 @@ function runConvert(string $id, array $record, array $secrets): void
         return;
     }
 
-    $crypto = new Crypto7z();
+    $crypto = new StashCrypto();
     $encoder = new VideoEncoder();
     $workDir = Datastore::tmpfsWorkDir('convert');
 
@@ -127,7 +130,7 @@ function runConvert(string $id, array $record, array $secrets): void
 
         $extractDir = "{$workDir}/extract";
 
-        if (!$crypto->extract($archivePath, $extractDir, $password)) {
+        if (!$crypto->extract($archivePath, $extractDir, $key)) {
             Jobs::finish($id, false, 'Could not decrypt the video.');
 
             return;
@@ -179,7 +182,7 @@ function runConvert(string $id, array $record, array $secrets): void
         // Never encrypt straight over the live archive — replace() writes
         // beside it, proves the new archive opens and holds the same bytes,
         // and only then swaps it in (Docs/PLAN.md 4.29).
-        if (!$crypto->replace($convertedPath, $archivePath, $password)) {
+        if (!$crypto->replace($convertedPath, $archivePath, $key)) {
             error_log("MyStash convert: failed to replace {$archivePath} for {$user}");
             Jobs::finish($id, false, 'Could not save the converted video. The original is untouched — try again.');
 
@@ -202,7 +205,7 @@ function runConvert(string $id, array $record, array $secrets): void
         ];
 
         $datastore = new Datastore();
-        $index = $datastore->loadIndex($user, $password);
+        $index = $datastore->loadIndex($user, $key);
 
         if ($index === null) {
             // The media is converted and safe; only the labels will be wrong.
@@ -230,15 +233,15 @@ function runConvert(string $id, array $record, array $secrets): void
         // copy be derived from what remains.
         $categories = new VideoCategories();
         $assignments = array_values(array_filter(
-            $categories->load($user, $password, $videoId),
+            $categories->load($user, $key, $videoId),
             static fn($assignment) => $assignment['name'] !== 'Not Converted',
         ));
-        $categories->save($user, $password, $videoId, $assignments, $index);
+        $categories->save($user, $key, $videoId, $assignments, $index);
 
-        $metadata = $datastore->loadVideoMetadata($user, $password, $videoId);
+        $metadata = $datastore->loadVideoMetadata($user, $key, $videoId);
 
         if ($metadata !== null) {
-            $datastore->saveVideoMetadata($user, $password, $videoId, VideoQuality::apply([
+            $datastore->saveVideoMetadata($user, $key, $videoId, VideoQuality::apply([
                 ...$metadata,
                 ...$measured,
                 'format' => 'mp4',
@@ -246,7 +249,7 @@ function runConvert(string $id, array $record, array $secrets): void
             ]));
         }
 
-        if (!$datastore->saveIndex($user, $password, $index)) {
+        if (!$datastore->saveIndex($user, $key, $index)) {
             error_log("MyStash convert: converted {$videoId} for {$user} but could not save the index");
             Jobs::finish($id, false, 'The video converted, but its index entry could not be saved.');
 
@@ -278,7 +281,7 @@ function runPreview(string $id, array $record, array $secrets): void
 {
     $result = (new VideoPreview())->buildClip(
         (string) $record['user'],
-        (string) $secrets['password'],
+        (string) $secrets['key'],
         (string) $record['target'],
         static fn(string $stage) => Jobs::update($id, ['message' => $stage]),
         isset($record['frame_at']) ? (float) $record['frame_at'] : null,
@@ -292,7 +295,7 @@ function runPreview(string $id, array $record, array $secrets): void
 }
 
 /**
- * Make a trimmed copy of one video beside it, `{ID}_trim.mp4.enc`.
+ * Make a trimmed copy of one video beside it, `{ID}_trim.mp4.epc`.
  *
  * A convert job carrying `trim_mode`, `trim_from_ms` and `trim_to_ms` in its
  * public record. The video itself is only read: VideoTrim::make() writes the
@@ -311,7 +314,7 @@ function runTrim(string $id, array $record, array $secrets): void
 
     $result = (new VideoTrim())->make(
         (string) $record['user'],
-        (string) $secrets['password'],
+        (string) $secrets['key'],
         (string) $record['target'],
         $spec,
         static function (float $done, float $total) use ($id): void {
@@ -348,7 +351,7 @@ function runRekey(string $id, array $record, array $secrets): void
 
     $result = (new Rekey())->run(
         $user,
-        (string) $secrets['old_password'],
+        (string) $secrets['old_key'],
         (string) $secrets['new_password'],
         static function (int $done, int $total, string $name) use ($id): void {
             Jobs::update($id, [
@@ -368,4 +371,42 @@ function runRekey(string $id, array $record, array $secrets): void
     }
 
     Jobs::finish($id, true, $result['message'] . ' Sign in again with your new password.');
+}
+
+/**
+ * Upgrade a v1 (7z) stash to the v2 format, once (Docs/v2_migration.md).
+ *
+ * Started by login.php the first time the right password opens a v1 stash.
+ * All of the work — and the rules that make an interruption harmless — is in
+ * MigrateV2; this only reports how far along it is.
+ *
+ * @param array<string, mixed> $record
+ * @param array<string, string> $secrets
+ */
+function runUpgrade(string $id, array $record, array $secrets): void
+{
+    $user = (string) $record['user'];
+
+    Jobs::update($id, ['message' => 'Checking your password…']);
+
+    $result = (new MigrateV2())->run(
+        $user,
+        (string) $secrets['password'],
+        static function (int $done, int $total, string $name) use ($id): void {
+            Jobs::update($id, [
+                'done' => $done,
+                'total' => $total,
+                'percent' => $total > 0 ? min(99, (int) round($done / $total * 100)) : 0,
+                'message' => "Upgraded {$done} of {$total} archives",
+            ]);
+        },
+    );
+
+    if (!$result['ok']) {
+        error_log("MyStash v2 upgrade failed for {$user}: " . $result['message']);
+    }
+
+    Jobs::finish($id, $result['ok'], $result['ok']
+        ? $result['message'] . ' Sign in again with the same password.'
+        : $result['message']);
 }

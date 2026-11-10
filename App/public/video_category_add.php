@@ -46,7 +46,7 @@ if ($name === '' || !isset($index['categories'][$name])) {
 }
 
 $categories = new VideoCategories();
-$assignments = $categories->load(Session::user(), Session::password(), $id);
+$assignments = $categories->load(Session::user(), Session::key(), $id);
 
 // The same category may be assigned repeatedly, but not twice at the same time.
 foreach ($assignments as $assignment) {
@@ -58,8 +58,8 @@ foreach ($assignments as $assignment) {
 
 $assignments[] = ['name' => $name, 'timestamp_seconds' => $timestamp];
 
-$categories->save(Session::user(), Session::password(), $id, $assignments, $index);
-(new Datastore())->saveIndex(Session::user(), Session::password(), $index);
+$categories->save(Session::user(), Session::key(), $id, $assignments, $index);
+(new Datastore())->saveIndex(Session::user(), Session::key(), $index);
 Session::setIndex($index);
 
 header('Location: ' . $redirect);

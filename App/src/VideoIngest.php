@@ -19,7 +19,7 @@ final class VideoIngest
 {
     public function __construct(
         private VideoEncoder $encoder = new VideoEncoder(),
-        private Crypto7z $crypto = new Crypto7z(),
+        private StashCrypto $crypto = new StashCrypto(),
     ) {
     }
 
@@ -35,7 +35,7 @@ final class VideoIngest
      */
     public function ingest(
         string $user,
-        string $password,
+        string $key,
         string $uploadedTmpPath,
         string $originalFilename,
         array $index,
@@ -184,9 +184,9 @@ final class VideoIngest
             $metadataPath = "{$workDir}/{$id}.json";
             file_put_contents($metadataPath, json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-            $this->crypto->encrypt($originalPath, "{$videoDir}/{$id}.mp4.enc", $password);
-            $this->crypto->encrypt($previewImagePath, "{$videoDir}/{$id}.jpg.preview.enc", $password);
-            $this->crypto->encrypt($metadataPath, "{$videoDir}/{$id}.json.enc", $password);
+            $this->crypto->encrypt($originalPath, "{$videoDir}/{$id}.mp4.epc", $key);
+            $this->crypto->encrypt($previewImagePath, "{$videoDir}/{$id}.jpg.preview.epc", $key);
+            $this->crypto->encrypt($metadataPath, "{$videoDir}/{$id}.json.epc", $key);
 
             // Everything is on disk; the caller adds it to the index next.
             $claimedDir = null;

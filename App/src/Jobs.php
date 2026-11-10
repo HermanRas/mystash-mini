@@ -22,14 +22,16 @@ namespace MyStash;
  * Everything lives in tmpfs, never on disk:
  *
  *  - `{id}.json`  the public record — state, counts, message. Never secrets.
- *  - `{id}.key`   the passwords the worker needs, mode 0600, deleted by the
- *                 worker the moment it has read them.
+ *  - `{id}.key`   the secrets the worker needs, mode 0600, deleted by the
+ *                 worker the moment it has read them. Usually the stash key
+ *                 (StashKey); a password only for a re-key (the new one) and
+ *                 the v1 → v2 upgrade, which have to derive a key from it.
  *  - `{id}.lock`  held under an exclusive flock for the worker's whole life,
  *                 which is how anyone else can tell a worker is still alive
  *                 without trusting the record to be honest about it.
  *
- * Putting the passwords in a tmpfs file is not a new exposure: the session that
- * started the job is *already* a file in /dev/shm holding the same password
+ * Putting the key in a tmpfs file is not a new exposure: the session that
+ * started the job is *already* a file in /dev/shm holding the same key
  * (see Session). What matters is that it is RAM — gone on container restart,
  * never written to the persistent volume — and that it is not on the worker's
  * argv, where `ps` would show it to anything else in the container.
@@ -276,8 +278,8 @@ final class Jobs
      * Needed because job ids are hashes of what the job is about, so there is
      * no way to ask "does this user have anything running" other than to look
      * at the records. Deleting a stash out from under a running worker would
-     * let it write files back into the directory just removed — 7zip creates
-     * missing parents — leaving a half-resurrected stash behind.
+     * let it write files back into the directory just removed — v1's 7zip
+     * created missing parents — leaving a half-resurrected stash behind.
      */
     public static function aliveFor(string $user): ?string
     {

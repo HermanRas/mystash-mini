@@ -4,7 +4,7 @@
 
 - **Backend:** PHP
 - **Runtime:** a single Docker container — nginx on 8080 with PHP-FPM behind it on the container's own loopback (see `App/docker-entrypoint.sh` and Docs/DEPLOY.md §3)
-- **Encryption:** 7zip (standard, well-known algorithm), password-protected archives
+- **Encryption (v2):** libsodium, built into PHP — Argon2id turns the password into a key, XChaCha20-Poly1305 secretstream encrypts each file as an authenticated `.epc` archive (§3.1). v1 used 7-Zip `.enc` archives; see Docs/v2_migration.md
 - **Video processing:** PHP-driven conversion to MP4 (H.265/MPEG-H HEVC), frame extraction for previews
 - **Frontend:** HTML/CSS/JS, dark-theme UI (see §4)
 
@@ -12,9 +12,10 @@
 
 | Dependency | Purpose | Notes |
 | --- | --- | --- |
-| `p7zip` (7-Zip CLI, `7z`) | Create/extract AES-256 encrypted `.7z` archives for the datastore | Used purely for encryption, not compression — archives are created with compression level `-mx=0` (store only). Video/preview files are already compressed (MP4/H.265); recompressing them would waste CPU and slow down decrypt-and-load latency for no size benefit. Must be installed in the Docker image; invoked from PHP via `proc_open`/`exec` with the password passed safely (avoid shell interpolation of user input) |
+| PHP `sodium` extension (libsodium) | Argon2id key derivation and XChaCha20-Poly1305 authenticated encryption for every archive in the datastore | Bundled with PHP; no external process, so neither the password nor the key is ever on a command line. Files are stored, not compressed — video and images are already compressed |
+| `p7zip` (7-Zip CLI, `7z`) | **v1 only:** read the old `.enc` archives once, to upgrade a v1 stash (`App/src/MigrateV2.php`) | Nothing writes `.enc` any more. Removable once no v1 stash remains anywhere |
 | `ffmpeg` | Transcode uploaded video to MP4 (H.265/HEVC); extract frame snapshots every 15s for preview generation; build short muted preview clips | Core dependency for upload processing and format conversion |
-| PHP `exec`/`proc_open` | Shell out to `ffmpeg` and `7z` | No PHP extension for either exists that's production-safe — CLI invocation is the standard approach |
+| PHP `exec`/`proc_open` | Shell out to `ffmpeg` (and to `7z` for a v1 upgrade) | Always with an argv array, never a shell string |
 | (Optional) `ffprobe` | Read video metadata (duration, codec, resolution) on upload | Ships with ffmpeg |
 
 ### Nothing is fetched from anywhere else
@@ -32,21 +33,22 @@ leaves this origin.
 
 ### 2.1 Registration & Login
 
-**Creating a stash:** a user is nothing more than a datastore directory plus an index archive encrypted with their password — there is no account record and no stored password. Registration (`register.php`) takes a username, a password and a confirmation, then creates `App/Data/{user}/videos/{user}.json.enc` holding an empty video list, a `default` creator and a `Not Converted` category (both of which ingestion relies on). Usernames are **letters and digits only**, at most 32 characters, and must be unused. That rule is also what makes a username safe to use directly as a path segment — no separators or dots, so it cannot escape the data directory. The same validation guards login.
+**Creating a stash:** a user is nothing more than a datastore directory plus an index archive encrypted with a key derived from their password — there is no account record and no stored password. Registration (`register.php`) takes a username, a password and a confirmation, derives a fresh key (new random salt), then creates `App/Data/{user}/videos/{user}.json.epc` holding an empty video list, a `default` creator and a `Not Converted` category (both of which ingestion relies on). Usernames are **letters and digits only**, at most 32 characters, and must be unused. That rule is also what makes a username safe to use directly as a path segment — no separators or dots, so it cannot escape the data directory. The same validation guards login.
 
-**Password rules:** at least **24 characters**. Because the password is the encryption key, it is never stored, can never be reset, and cannot be rate-limited where it matters — anyone holding a copy of the `.7z` files can attack them offline as fast as their hardware allows. Length is therefore the only real defence. The minimum is enforced at registration and on password change; it is deliberately *not* enforced at login, so stashes created before the rule still open.
+**Password rules:** at least **24 characters**. Because the encryption key is derived from the password, the password is never stored, can never be reset, and cannot be rate-limited where it matters — anyone holding a copy of the `.epc` files can attack them offline. Argon2id makes every guess cost ~0.5 s and 256 MB, but a short password is still a small search, so length remains the first defence. The minimum is enforced at registration and on password change; it is deliberately *not* enforced at login, so stashes created before the rule still open.
 
-Because the password *is* the encryption key and is never stored, a forgotten password means the stash cannot be recovered — by the user or anyone else.
+Because the key comes only from the password and neither is ever stored, a forgotten password means the stash cannot be recovered — by the user or anyone else.
 
 1. User submits a **username** and **password**. Neither is stored anywhere by the app.
 2. App checks that path `./{user}` exists (confirms a valid username).
-3. App attempts to extract `{user}.json.enc` (a 7zip-encrypted archive) using the submitted password.
-4. Success = login. Failure (bad path or bad password) = rejected, no further detail given.
-5. Once logged in, the app reads the decrypted video index from `{user}.json.enc` and renders the video wall.
+3. App reads the salt and Argon2id cost from the header of `{user}.json.epc` and derives the key from the submitted password (`StashKey::unlock`). With no stash to take a salt from, it derives against a throwaway salt anyway, so an unknown username costs the same time as a wrong password.
+4. App attempts to decrypt `{user}.json.epc` with that key. Success = login. Failure (bad path or bad password) = rejected, no further detail given.
+5. Once logged in, the app reads the decrypted video index from `{user}.json.epc` and renders the video wall.
+6. **A v1 stash** (`{user}.json.enc` and no `.epc`): the password is checked with 7z instead, and the right one starts the one-time upgrade to v2 as a background job (`upgrade.php` shows its progress) rather than a session. The user signs in again when it finishes. See Docs/v2_migration.md.
 
-**Session storage:** the password (and a cached copy of the decrypted index) live in a PHP session — but the session store itself is redirected to tmpfs (`/dev/shm`, RAM-backed) instead of PHP's default on-disk session path, so the password never touches persistent disk. It's gone on logout or container restart. See `App/src/Session.php`.
+**Session storage:** the derived key — never the password — and a cached copy of the decrypted index live in a PHP session — but the session store itself is redirected to tmpfs (`/dev/shm`, RAM-backed) instead of PHP's default on-disk session path, so the key never touches persistent disk. It's gone on logout or container restart. See `App/src/Session.php`.
 
-**Stale sessions:** if the index no longer decrypts with the password the session holds, the stash was re-keyed elsewhere and the session is ended immediately (back to the login page, with an explanation). It must not simply fall back to its cached index: every write re-encrypts with the session's password, so carrying on would rewrite the index and creator records under the *old* key and split the stash across two passwords.
+**Stale sessions:** if the index no longer decrypts with the key the session holds, the stash was re-keyed elsewhere and the session is ended immediately (back to the login page, with an explanation). It must not simply fall back to its cached index: every write re-encrypts with the session's key, so carrying on would rewrite the index and creator records under the *old* key and split the stash across two passwords.
 
 **Index freshness:** every page and endpoint re-reads the index from disk (`Session::refreshIndex()`) rather than trusting the copy taken at login. Because each change rewrites the whole index, a session working from a login-time snapshot would silently revert changes made in another session — that is exactly how a deleted video reappeared on the wall once.
 
@@ -95,11 +97,13 @@ Quality follows the standard tiers, keyed on vertical pixel count (`p` = progres
 ### 2.6 Password Change
 
 1. User provides current password + new password (entered twice for confirmation); the new password must meet the §2.1 minimum length.
-2. App re-encrypts the entire datastore with the new password — **every** archive, not just the videos: the four files per video, each creator's record and profile picture, and the index.
-3. Order of operations: reprocess everything else first, then update `{user}.json.enc` last. While the index still opens with the old password, an interrupted run is retryable.
-4. While reprocessing, the previous encrypted file is kept alongside as `{name}.enc.old` until the run completes successfully, then removed. A failed re-encrypt restores that one archive from its `.old` and aborts before touching anything further.
+2. App derives a new key from the new password, with a **new salt** at the current Argon2id cost, and re-encrypts the entire datastore under it — **every** archive, not just the videos: the four files per video, each creator's record and profile picture, and the index.
+3. Order of operations: reprocess everything else first, then update `{user}.json.epc` last. While the index still opens with the old password, an interrupted run is retryable.
+4. While reprocessing, the previous encrypted file is kept alongside as `{name}.epc.old` until the run completes successfully, then removed. A failed re-encrypt restores that one archive from its `.old` and aborts before touching anything further.
 
-The re-encryption pass is `App/src/Rekey.php`. It is reached from the account screen (`user.php` → `password_change.php`) and, because re-encrypting every archive is minutes of CPU-bound 7zip work, it runs as a detached background job rather than inside the request — the browser polls `job_status.php` for progress. `App/bin/rekey_user.php {user} {old} {new}` remains as the command-line entry to the same code, which is what makes an interrupted run retryable without a session.
+The re-encryption pass is `App/src/Rekey.php`. It is reached from the account screen (`user.php` → `password_change.php`) and, because re-encrypting every archive is minutes of work on a large stash, it runs as a detached background job rather than inside the request — the browser polls `job_status.php` for progress. `App/bin/rekey_user.php {user} {old} {new}` remains as the command-line entry to the same code, which is what makes an interrupted run retryable without a session.
+
+The current password is checked by deriving it again with the stash's salt and comparing keys (`StashKey::matches`) — the session holds only the key, so there is no password to compare against. The job is handed the *current key* and the new password, never the current password.
 
 ### 2.7 Categories
 
@@ -205,15 +209,38 @@ All data is stored locally per-user; the app stores nothing server-side outside 
 The datastore root in this repo is `App/Data/` (gitignored — see [../README.md](../README.md) Repository Layout), so paths below are relative to that:
 
 ```
-App/Data/{user}/videos/{user}.json.enc                         # encrypted video index (7z, password-locked)
-App/Data/{user}/videos/Video{ID}/{ID}.mp4.enc                  # encrypted video file
-App/Data/{user}/videos/Video{ID}/{ID}.mp4.preview.enc          # encrypted short preview clip
-App/Data/{user}/videos/Video{ID}/{ID}.jpg.preview.enc          # encrypted preview thumbnail
-App/Data/{user}/videos/Video{ID}/{ID}.json.enc                 # encrypted per-video metadata
-App/Data/{user}/creators/Creator{ID}/{ID}.json.enc             # encrypted creator record
-App/Data/{user}/creators/Creator{ID}/{ID}.profile.png.enc      # encrypted creator profile picture
-App/Data/{user}/**/*.enc.old                                   # transient safety copy during re-encryption only
+App/Data/{user}/videos/{user}.json.epc                         # encrypted video index — its header's salt is the stash's
+App/Data/{user}/videos/Video{ID}/{ID}.mp4.epc                  # encrypted video file
+App/Data/{user}/videos/Video{ID}/{ID}.mp4.preview.epc          # encrypted short preview clip
+App/Data/{user}/videos/Video{ID}/{ID}.jpg.preview.epc          # encrypted preview thumbnail
+App/Data/{user}/videos/Video{ID}/{ID}_trim.mp4.epc             # encrypted trimmed copy, while one is pending
+App/Data/{user}/videos/Video{ID}/{ID}.json.epc                 # encrypted per-video metadata
+App/Data/{user}/creators/Creator{ID}/{ID}.json.epc             # encrypted creator record
+App/Data/{user}/creators/Creator{ID}/{ID}.profile.png.epc      # encrypted creator profile picture
+App/Data/{user}/**/*.epc.old                                   # transient safety copy during re-encryption only
 ```
+
+A v1 stash has the same layout with `.enc` (7-Zip) in place of `.epc`; it is converted in place, once, by the upgrade (§2.1 step 6, Docs/v2_migration.md).
+
+### 3.1 The `.epc` archive
+
+Every archive is one file encrypted on its own (`App/src/StashCrypto.php`). All integers are big-endian:
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 5 | magic `MSEPC` |
+| 5 | 1 | format version, `2` |
+| 6 | 1 | key derivation: `2` = Argon2id (libsodium `ARGON2ID13`) |
+| 7 | 4 | Argon2id opslimit |
+| 11 | 8 | Argon2id memlimit, in bytes |
+| 19 | 16 | Argon2id salt — the same for every archive in a stash, new on every re-key |
+| 35 | 24 | libsodium secretstream header |
+| 59 | … | frames: a 4-byte length, then XChaCha20-Poly1305 secretstream ciphertext |
+
+- The **first frame** is the file's name, encrypted with bytes 0–34 as additional data — so the cost and salt cannot be edited without the archive refusing to open, and the name is hidden (as v1's `-mhe=on` hid it).
+- **Every later frame** is up to 1 MiB of the file. The last is tagged `FINAL`; an archive that ends without it was truncated, and anything after it is refused.
+- The **key** is `Argon2id(password, salt, opslimit, memlimit)`, 32 bytes — libsodium's MODERATE cost (3 passes, 256 MB, ~0.5 s). It is derived once per login and carried in the session as a token (`StashKey`), never stored on disk.
+- The header carries everything needed to re-derive the key from the password, so any single archive can be decrypted on its own — which is what `tools/decode.php` does, with no app code at all.
 
 **Playlists add no files.** They live in the index (§2.9) as a list of
 `{id, name, videos: [<video id>, ...]}`, plus a `playlist_seq` high-water mark
@@ -320,7 +347,7 @@ Top to bottom, single column (no side rail): **title**, player, meta line (views
 2. Debounce 150–200ms before triggering, to avoid firing during rapid scroll.
 3. `mouseleave` cancels pending timers, stops playback, restores static thumbnail instantly.
 
-**In use: option 2 (short video clip injection)** — the encrypted `{ID}.mp4.preview.enc` timelapse from §2.3, served through `media.php` and played in a `<video muted loop playsinline>` on hover. The other two options are recorded here as alternatives only.
+**In use: option 2 (short video clip injection)** — the encrypted `{ID}.mp4.preview.epc` timelapse from §2.3, served through `media.php` and played in a `<video muted loop playsinline>` on hover. The other two options are recorded here as alternatives only.
 
 **Preview implementation options:**
 

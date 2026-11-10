@@ -1,7 +1,8 @@
 # Deploying MyStash
 
 MyStash is a single container: nginx on port 8080 with PHP-FPM behind it on
-the container's own loopback, and `ffmpeg` and `7z` alongside them. There is no
+the container's own loopback, and `ffmpeg` alongside them (plus `7z`, kept
+only to upgrade v1 stashes — §8). There is no
 database, no queue and no external service — the whole of a user's data is
 encrypted files under `App/Data`, and the whole of the runtime state is in
 `/dev/shm`.
@@ -19,7 +20,8 @@ plaintext goes** and **what a backup is worth without the password.**
 | Docker Engine + Compose v2 | `docker compose version` should report v2.24 or newer — the production overlay uses `!override` and §2 uses `!reset`, neither of which is in older versions |
 | Disk | the size of your library, plus room for one video at a time while it is being converted |
 | RAM | 4 GB free for `/dev/shm` on top of whatever else the host does (see §6) |
-| A host you trust | the password is typed into this app, held in RAM for the session, and never stored |
+| A host you trust | the password is typed into this app; the key derived from it is held in RAM for the session; neither is ever stored |
+| RAM for logins | each login attempt runs Argon2id at 256 MB for ~0.5 s — a burst of simultaneous attempts costs 256 MB each (§4) |
 
 Nothing else. No PHP, no ffmpeg and no 7-Zip on the host — they are in the
 image.
@@ -269,20 +271,25 @@ Two things a proxy does not fix:
   `REMOTE_ADDR` is the client's — and only if you trust the header, which you
   do only if the proxy always sets it.
 - **Anyone who can reach the login page can attempt a login**, and each attempt
-  against an existing stash spawns a 7-Zip decrypt. Exposing this to the open
-  internet is not a thing to do casually.
+  costs the server an Argon2id run — ~0.5 s of CPU and 256 MB of RAM, by
+  design, whether or not the name exists. The throttle refuses before that work
+  once the limits are hit, but sixteen simultaneous attempts still ask for
+  4 GB. Exposing this to the open internet is not a thing to do casually.
 
 ---
 
 ## 5. Creating the first stash
 
 Open the app and register. There is no administrator and no first-run setup:
-a user *is* a directory plus an archive encrypted with their password.
+a user *is* a directory plus archives encrypted with a key derived from their
+password.
 
 - Usernames are letters and digits, up to 32 characters.
-- Passwords are at least 24 characters, because the password is the AES key
-  and anyone holding a copy of `App/Data` can attack it offline at whatever
-  speed their hardware allows. Length is the only defence that matters.
+- Passwords are at least 24 characters. Anyone holding a copy of `App/Data` can
+  attack it offline; Argon2id makes each guess cost ~0.5 s and 256 MB, but only
+  length makes the search too large to finish. A random password from a
+  password manager is best: about 40 random characters already exceed the
+  256-bit key, so more adds nothing.
 - **There is no reset.** Not "an administrator has to do it" — there is no
   stored password to reset, no recovery key, and no copy of the plaintext
   anywhere. A forgotten password is a destroyed library. Say this out loud to
@@ -363,6 +370,10 @@ docker compose start app
 - **The password is not in the backup and cannot be recovered from it.** A
   backup of a stash whose password is forgotten is a folder of noise. Whatever
   you use to remember passwords, that is the other half of this backup.
+- **A backup can be read without this app.** `tools/decode.php` (in the
+  repository, not the image) decrypts a single `.epc` or a whole stash with
+  only PHP and the password — `php tools/decode.php -F backup/App/Data/me/`.
+  It is also the quickest way to test that a restore is real.
 - **Test a restore.** Copy the tarball to a scratch machine, unpack it, bring
   the stack up and log in. A backup nobody has restored is a hypothesis.
 - `/dev/shm` is never backed up, by design — it holds the only plaintext the
@@ -384,25 +395,42 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
   nothing about the code that runs.
 
 - **Do not upgrade while a re-key is running.** Changing a stash's password
-  rewrites every archive in it and keeps `.enc.old` copies until the run
+  rewrites every archive in it and keeps `.epc.old` copies until the run
   completes; killing the container mid-run leaves that half-done. The Profile
   screen shows progress — wait for it.
 - **Restarting ends every session** (`/dev/shm` is cleared) and kills any
   in-flight conversion. A conversion can simply be run again; nothing is lost
   but the CPU time.
-- The datastore format has changed once before, and one-off migrations live in
+- The datastore format has changed before, and one-off migrations live in
   `App/bin/` (`migrate_categories.php`, `migrate_records.php`). If an upgrade
   needs one, it will say so in the release notes. Back up first.
+
+### 8.1 v1 → v2.0.0
+
+v2.0.0 changes the encryption of every file (7-Zip `.enc` → libsodium `.epc`).
+**Back up `App/Data` first** (§7), then upgrade as above. Nothing is converted
+until each stash's owner signs in: the right password starts a one-time
+background upgrade with a progress page, and they sign in again when it
+finishes. An operator can do it ahead of time instead:
+
+```bash
+docker compose exec -u www-data app php bin/migrate_v2.php {user}   # asks for the password
+```
+
+Until a stash has been upgraded it cannot be used, and its v1 files are not
+touched until every v2 file has been written and verified. Plan disk space for
+a second copy of the largest stash while it runs. The details, and what
+changed, are in [v2_migration.md](v2_migration.md).
 
 ---
 
 ## 9. Verifying an install
 
 ```bash
-docker compose exec app php /app/tests/smoke_test.php
+docker compose exec -u www-data app php /app/tests/smoke_test.php
 ```
 
-227 checks over encryption, ingestion, querying, re-keying, playlists and the
+355 checks over encryption (including tampering and the v1 upgrade), ingestion, querying, re-keying, playlists and the
 injection guards. It is self-contained: the one real video it needs is
 synthesised with ffmpeg into tmpfs and thrown away afterwards, so this runs on
 a fresh clone with an empty datastore.
@@ -433,7 +461,8 @@ other people" is where the surprises live:
   one `/dev/shm`, and one user converting a 4K video is felt by the other.
 - **No quotas.** Anyone with a stash can fill the disk.
 - **No password reset, no account recovery, no administrator.** §5.
-- **Not hardened against a hostile host.** The password is in RAM for the
-  session and the plaintext is in `/dev/shm` while a video plays. Anyone with
+- **Not hardened against a hostile host.** The password passes through RAM at
+  login, the derived key is in RAM (and the tmpfs session) for the session,
+  and the plaintext is in `/dev/shm` while a video plays. Anyone with
   root on the machine can read both. The threat model is a stolen disk and a
   curious housemate, not a compromised server.

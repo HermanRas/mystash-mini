@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace MyStash;
 
-require_once __DIR__ . '/Crypto7z.php';
+require_once __DIR__ . '/StashCrypto.php';
 
 /**
- * Reads/writes the per-user encrypted video index ({user}.json.enc) and the
- * per-video metadata files (Video{ID}/{ID}.json.enc).
+ * Reads/writes the per-user encrypted video index ({user}.json.epc) and the
+ * per-video metadata files (Video{ID}/{ID}.json.epc).
  *
  * See Docs/SPECIFICATIONS.md §3 for the on-disk datastore layout and §2.1
  * for the login flow this class implements the decrypt/verify step of.
@@ -64,7 +64,7 @@ final class Datastore
     private const DATA_ROOT = __DIR__ . '/../Data';
     private const TMPFS_ROOT = '/dev/shm/mystash-extract';
 
-    public function __construct(private Crypto7z $crypto = new Crypto7z())
+    public function __construct(private StashCrypto $crypto = new StashCrypto())
     {
     }
 
@@ -81,7 +81,27 @@ final class Datastore
 
     public static function indexArchivePath(string $user): string
     {
+        return self::DATA_ROOT . "/{$user}/videos/{$user}.json.epc";
+    }
+
+    /** Where a v1 (7z, `.enc`) stash keeps its index. Read only by MigrateV2. */
+    public static function legacyIndexArchivePath(string $user): string
+    {
         return self::DATA_ROOT . "/{$user}/videos/{$user}.json.enc";
+    }
+
+    /**
+     * A stash still in the v1 format: it has a v1 index and no v2 one.
+     *
+     * The v2 index is the last thing MigrateV2 writes, so its presence is what
+     * marks an upgrade as finished — a run that died part way leaves this true
+     * and is simply run again.
+     */
+    public function isV1Stash(string $user): bool
+    {
+        return $this->userExists($user)
+            && is_file(self::legacyIndexArchivePath($user))
+            && !is_file(self::indexArchivePath($user));
     }
 
     /**
@@ -178,61 +198,62 @@ final class Datastore
     }
 
     /**
-     * Attempts to decrypt and parse the user's video index with the given
-     * password. Returns null on any failure (unknown user, wrong password,
-     * missing/corrupt archive) — this is also how login verification works,
-     * since a wrong password simply fails to extract.
+     * Attempts to decrypt and parse the user's video index with the given key
+     * (a StashKey token). Returns null on any failure (unknown user, wrong
+     * password, missing, corrupt or tampered archive) — this is also how login
+     * verification works, since a key derived from a wrong password simply
+     * fails to decrypt.
      */
-    public function loadIndex(string $user, string $password): ?array
+    public function loadIndex(string $user, string $key): ?array
     {
         if (!$this->userExists($user)) {
             return null;
         }
 
-        return $this->loadJsonArchive(self::indexArchivePath($user), "{$user}.json", $password);
+        return $this->loadJsonArchive(self::indexArchivePath($user), "{$user}.json", $key);
     }
 
     /**
-     * Re-encrypts $index back into the user's {user}.json.enc with $password.
+     * Re-encrypts $index back into the user's {user}.json.epc with $key.
      */
-    public function saveIndex(string $user, string $password, array $index): bool
+    public function saveIndex(string $user, string $key, array $index): bool
     {
         $videosDir = self::DATA_ROOT . "/{$user}/videos";
         if (!is_dir($videosDir)) {
             mkdir($videosDir, 0700, true);
         }
 
-        return $this->saveJsonArchive(self::indexArchivePath($user), "{$user}.json", $password, $index);
+        return $this->saveJsonArchive(self::indexArchivePath($user), "{$user}.json", $key, $index);
     }
 
-    public function loadVideoMetadata(string $user, string $password, string $id): ?array
+    public function loadVideoMetadata(string $user, string $key, string $id): ?array
     {
-        return $this->loadJsonArchive(self::videoDir($user, $id) . "/{$id}.json.enc", "{$id}.json", $password);
+        return $this->loadJsonArchive(self::videoDir($user, $id) . "/{$id}.json.epc", "{$id}.json", $key);
     }
 
-    public function saveVideoMetadata(string $user, string $password, string $id, array $metadata): bool
+    public function saveVideoMetadata(string $user, string $key, string $id, array $metadata): bool
     {
         $dir = self::videoDir($user, $id);
         if (!is_dir($dir)) {
             mkdir($dir, 0700, true);
         }
 
-        return $this->saveJsonArchive("{$dir}/{$id}.json.enc", "{$id}.json", $password, $metadata);
+        return $this->saveJsonArchive("{$dir}/{$id}.json.epc", "{$id}.json", $key, $metadata);
     }
 
-    public function loadCreatorMetadata(string $user, string $password, string $id): ?array
+    public function loadCreatorMetadata(string $user, string $key, string $id): ?array
     {
-        return $this->loadJsonArchive(self::creatorDir($user, $id) . "/{$id}.json.enc", "{$id}.json", $password);
+        return $this->loadJsonArchive(self::creatorDir($user, $id) . "/{$id}.json.epc", "{$id}.json", $key);
     }
 
-    public function saveCreatorMetadata(string $user, string $password, string $id, array $metadata): bool
+    public function saveCreatorMetadata(string $user, string $key, string $id, array $metadata): bool
     {
         $dir = self::creatorDir($user, $id);
         if (!is_dir($dir)) {
             mkdir($dir, 0700, true);
         }
 
-        return $this->saveJsonArchive("{$dir}/{$id}.json.enc", "{$id}.json", $password, $metadata);
+        return $this->saveJsonArchive("{$dir}/{$id}.json.epc", "{$id}.json", $key, $metadata);
     }
 
     /**
@@ -252,7 +273,7 @@ final class Datastore
         return $names;
     }
 
-    private function loadJsonArchive(string $archivePath, string $plainName, string $password): ?array
+    private function loadJsonArchive(string $archivePath, string $plainName, string $key): ?array
     {
         if (!file_exists($archivePath)) {
             return null;
@@ -261,7 +282,7 @@ final class Datastore
         $extractDir = self::tmpfsWorkDir('extract');
 
         try {
-            if (!$this->crypto->extract($archivePath, $extractDir, $password)) {
+            if (!$this->crypto->extract($archivePath, $extractDir, $key)) {
                 return null;
             }
 
@@ -278,7 +299,7 @@ final class Datastore
         }
     }
 
-    private function saveJsonArchive(string $archivePath, string $plainName, string $password, array $data): bool
+    private function saveJsonArchive(string $archivePath, string $plainName, string $key, array $data): bool
     {
         $workDir = self::tmpfsWorkDir('extract');
         $plainPath = "{$workDir}/{$plainName}";
@@ -292,7 +313,7 @@ final class Datastore
             // that window would leave the stash with no index at all — the
             // whole library structure gone, videos stranded (Docs/PLAN.md
             // 4.29). This writes beside it and swaps only a verified archive in.
-            return $this->crypto->replace($plainPath, $archivePath, $password);
+            return $this->crypto->replace($plainPath, $archivePath, $key);
         } finally {
             self::wipe($workDir);
         }

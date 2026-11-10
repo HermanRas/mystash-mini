@@ -67,11 +67,11 @@ check "§2.1 a password under 24 characters is refused" $?
 test ! -d "App/Data/${PROBE}" && test ! -d "App/Data/bad-name"
 check "§2.1 neither refusal created a stash directory" $?
 
-# The real one. "Registration ... creates App/Data/{user}/videos/{user}.json.enc"
+# The real one. "Registration ... creates App/Data/{user}/videos/{user}.json.epc"
 OUT=$(post /dev/null -d "username=${PROBE}&password=${PASS}&confirm_password=${PASS}" \
   http://localhost:8090/register.php)
 echo "  register returned: ${OUT}"
-[ -f "App/Data/${PROBE}/videos/${PROBE}.json.enc" ]
+[ -f "App/Data/${PROBE}/videos/${PROBE}.json.epc" ]
 check "§2.1 registering creates the encrypted index archive" $?
 
 case "$OUT" in *wall.php) true;; *) false;; esac
@@ -81,7 +81,7 @@ check "§2.1 registration logs straight in and lands on the wall" $?
 # (both of which ingestion relies on)"
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
-$i = (new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"));
+$i = (new MyStash\Datastore())->loadIndex(getenv("U"), MyStash\StashKey::unlock(getenv("U"), getenv("P")));
 printf("%s: §2.1 the new stash opens with the registered password\n", $i !== null ? "PASS" : "FAIL");
 if ($i === null) { exit; }
 printf("%s: §2.1 it starts with an empty video list\n", ($i["videos"] ?? null) === [] ? "PASS" : "FAIL");
@@ -100,7 +100,7 @@ check "§2.1 the username cannot be registered twice" $?
 
 echo "--- §2.1 Login ---"
 
-# Steps 3-4: "App attempts to extract {user}.json.enc using the submitted
+# Steps 3-4: "App attempts to extract {user}.json.epc using the submitted
 # password. Success = login. Failure = rejected, no further detail given."
 rm -f "$JAR"
 OUT=$(post /dev/null -d "username=${PROBE}&password=wrong-password-entirely-xxx" http://localhost:8090/login.php)
@@ -118,7 +118,7 @@ post /dev/null -F "video=@${SRC}" http://localhost:8090/upload.php >/dev/null
 # §2.3 step 4 + §3: "All generated artifacts are encrypted and written to the
 # datastore" — the four files per video the layout names.
 VID="App/Data/${PROBE}/videos/Video1"
-for f in 1.mp4.enc 1.mp4.preview.enc 1.jpg.preview.enc 1.json.enc; do
+for f in 1.mp4.epc 1.mp4.preview.epc 1.jpg.preview.epc 1.json.epc; do
   [ -f "${VID}/${f}" ]
   check "§3 the upload wrote ${f}" $?
 done
@@ -128,7 +128,7 @@ require_once "/app/src/Datastore.php";
 require_once "/app/src/VideoCategories.php";
 require_once "/app/src/VideoCreators.php";
 require_once "/app/src/VideoQuality.php";
-$u = getenv("U"); $p = getenv("P");
+$u = getenv("U"); $p = MyStash\StashKey::unlock($u, getenv("P"));
 $store = new MyStash\Datastore();
 $v = ($store->loadIndex($u, $p)["videos"] ?? [])[0] ?? null;
 if ($v === null) { echo "FAIL: §2.3 the upload produced an index entry\n"; exit; }
@@ -161,7 +161,7 @@ post /dev/null -d "id=1&title=Renamed&description=&quality=8K&not_converted=0" \
   http://localhost:8090/video_save.php >/dev/null
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
-$v = ((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"))["videos"] ?? [])[0];
+$v = ((new MyStash\Datastore())->loadIndex(getenv("U"), MyStash\StashKey::unlock(getenv("U"), getenv("P")))["videos"] ?? [])[0];
 printf("%s: §2.3 the save did take the title (%s)\n", $v["title"] === "Renamed" ? "PASS" : "FAIL", $v["title"]);
 printf("%s: §2.3 but a posted quality is ignored (%s)\n", ($v["quality"] ?? "") !== "8K" ? "PASS" : "FAIL", $v["quality"] ?? "none");
 printf("%s: §2.3 and a posted not_converted is ignored\n", !empty($v["not_converted"]) ? "PASS" : "FAIL");
@@ -202,7 +202,7 @@ echo "--- §2.3 Views ---"
 curl -s -b "$JAR" -o /dev/null "http://localhost:8090/video.php?id=1"
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
-$v = ((new MyStash\Datastore())->loadIndex(getenv("U"), getenv("P"))["videos"] ?? [])[0];
+$v = ((new MyStash\Datastore())->loadIndex(getenv("U"), MyStash\StashKey::unlock(getenv("U"), getenv("P")))["videos"] ?? [])[0];
 printf("%s: §2.3 opening the watch page does not count a view (%d)\n",
     (int) ($v["views"] ?? -1) === 0 ? "PASS" : "FAIL", (int) ($v["views"] ?? -1));
 ' | tee "/tmp/${PROBE}.o4"
@@ -212,7 +212,7 @@ fails=$((fails + $(grep -c '^FAIL' "/tmp/${PROBE}.o4")))
 curl -s -b "$JAR" -o /dev/null -d "id=1" http://localhost:8090/video_view.php
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
-$u = getenv("U"); $p = getenv("P");
+$u = getenv("U"); $p = MyStash\StashKey::unlock($u, getenv("P"));
 $store = new MyStash\Datastore();
 $v = ($store->loadIndex($u, $p)["videos"] ?? [])[0];
 $m = $store->loadVideoMetadata($u, $p, (string) $v["id"]);
@@ -239,7 +239,7 @@ curl -s -b "$JAR" -o /dev/null -d "id=1&name=NotAGlobalCategory&timestamp=00:00:
 
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/VideoCategories.php";
-$a = (new MyStash\VideoCategories())->load(getenv("U"), getenv("P"), "1");
+$a = (new MyStash\VideoCategories())->load(getenv("U"), MyStash\StashKey::unlock(getenv("U"), getenv("P")), "1");
 $h = array_values(array_filter($a, fn($x) => $x["name"] === "Highlights"));
 printf("%s: §2.7 the same category sits at two different timestamps (%d)\n",
     count($h) === 2 ? "PASS" : "FAIL", count($h));
@@ -258,7 +258,7 @@ curl -s -b "$JAR" -o /dev/null -d "name=Highlights" http://localhost:8090/catego
 docker compose exec -T -u www-data -e U="$PROBE" -e P="$PASS" app php -r '
 require_once "/app/src/Datastore.php";
 require_once "/app/src/VideoCategories.php";
-$u = getenv("U"); $p = getenv("P");
+$u = getenv("U"); $p = MyStash\StashKey::unlock($u, getenv("P"));
 $i = (new MyStash\Datastore())->loadIndex($u, $p);
 printf("%s: §2.7 deleting the category retires the global definition\n",
     !isset($i["categories"]["Highlights"]) ? "PASS" : "FAIL");

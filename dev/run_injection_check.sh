@@ -45,8 +45,9 @@ trap cleanup EXIT
 incontainer "rm -f ${CANARIES}" >/dev/null
 
 # --- register over HTTP, with a password made of shell metacharacters -----
-# The password is handed to 7z as -p<password> on every encrypt and extract in
-# the app, so if anything reached a shell it would reach it here.
+# In v1 the password went to 7z as -p<password> on every encrypt and extract;
+# v2 derives a key from it in-process, and only the v1 upgrade still hands it
+# to 7z. If anything reached a shell it would reach it here.
 curl -s -c "$JAR" -o /dev/null \
   --data-urlencode "username=${PROBE}" \
   --data-urlencode "password=${PASS}" \
@@ -83,7 +84,7 @@ cp "$FIXTURE" "/tmp/${PROBE}.mp4"
 curl -s -b "$JAR" -o /dev/null \
   -F "video=@/tmp/${PROBE}.mp4;filename=far.mp4" -F "preview_at=999999" \
   http://localhost:8090/upload.php
-[ -f "App/Data/${PROBE}/videos/Video2/2.jpg.preview.enc" ]
+[ -f "App/Data/${PROBE}/videos/Video2/2.jpg.preview.epc" ]
 check "an out-of-range preview_at still produces a video with a preview" $?
 
 # Every directory on disk must be one the index knows about — that is exactly

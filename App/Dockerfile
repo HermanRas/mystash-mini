@@ -6,6 +6,10 @@ FROM php:8.3.36-fpm
 # is ever scaled or restarted without the other. Splitting them bought a
 # FastCGI hop over a Docker network and a bind mount of the code into two
 # places; joining them means one build, one log stream and one thing to stop.
+#
+# p7zip-full is v1 baggage. Since v2.0.0 every archive is libsodium (PHP's
+# built-in sodium extension, no package needed); 7z is kept only so a v1 stash
+# can be read once and upgraded (App/src/MigrateV2.php, Docs/v2_migration.md).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         p7zip-full \

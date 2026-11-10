@@ -31,7 +31,7 @@ require_once "/app/src/VideoCategories.php";
 require_once "/app/src/VideoIngest.php";
 require_once "/app/src/Datastore.php";
 $u = getenv("U"); $p = getenv("P");
-if (!(new MyStash\User())->create($u, $p)) { fwrite(STDERR, "create failed\n"); exit(1); }
+if (!($p = (new MyStash\User())->create($u, $p))) { fwrite(STDERR, "create failed\n"); exit(1); }
 $store = new MyStash\Datastore();
 $index = $store->loadIndex($u, $p);
 $entry = (new MyStash\VideoIngest())->ingest(
