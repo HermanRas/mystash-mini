@@ -123,6 +123,60 @@ final class VideoStats
     }
 
     /**
+     * The videos whose title repeats an earlier one's: the ids a "delete
+     * duplicates" would remove.
+     *
+     * Titles match case-insensitively with surrounding and repeated whitespace
+     * ignored, so "My Clip" and "my  clip " are the same. In each group the
+     * earliest upload is kept (index order breaks ties and covers entries with
+     * no uploaded_at). Pictures are never counted — the stats page is videos.
+     *
+     * @param list<array<string,mixed>> $videos the index's videos
+     * @return list<string> ids of the copies to delete
+     */
+    public static function duplicateIds(array $videos): array
+    {
+        $groups = [];
+
+        foreach (array_values($videos) as $position => $video) {
+            if (($video['kind'] ?? 'video') === 'picture') {
+                continue;
+            }
+
+            $key = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', (string) ($video['title'] ?? ''))));
+
+            if ($key === '') {
+                continue;
+            }
+
+            $groups[$key][] = [
+                'id' => (string) $video['id'],
+                'at' => (string) ($video['uploaded_at'] ?? ''),
+                'pos' => $position,
+            ];
+        }
+
+        $ids = [];
+
+        foreach ($groups as $group) {
+            if (count($group) < 2) {
+                continue;
+            }
+
+            // Missing uploaded_at sorts last, so a dated original is kept
+            // over an undated copy.
+            usort($group, static fn(array $a, array $b) =>
+                [$a['at'] === '' ? 1 : 0, $a['at'], $a['pos']] <=> [$b['at'] === '' ? 1 : 0, $b['at'], $b['pos']]);
+
+            foreach (array_slice($group, 1) as $copy) {
+                $ids[] = $copy['id'];
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
      * A byte count for people: 1.4 GB, 812 MB, 96 KB.
      */
     public static function formatBytes(int $bytes): string

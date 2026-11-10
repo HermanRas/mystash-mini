@@ -84,6 +84,9 @@ $inspected = (string) ($_GET['inspected'] ?? '');
 $trimNotice = (string) ($_GET['trim'] ?? '');
 $trimError = (string) ($_GET['trim_error'] ?? '');
 $error = (string) ($_GET['error'] ?? '');
+$deduped = isset($_GET['deduped']) ? (int) $_GET['deduped'] : null;
+$dedupeSkipped = (int) ($_GET['dedupe_skipped'] ?? 0);
+$duplicateCount = count(VideoStats::duplicateIds($index['videos'] ?? []));
 
 $errors = [
     'busy' => 'That video is being converted right now. Inspect it once that finishes.',
@@ -111,6 +114,15 @@ $navActive = '';
 
   <?php if (isset($errors[$error])): ?>
     <p class="notice bad"><?= htmlspecialchars($errors[$error], ENT_QUOTES) ?></p>
+  <?php endif; ?>
+
+  <?php if ($deduped !== null): ?>
+    <p class="notice <?= $deduped > 0 || $dedupeSkipped === 0 ? 'ok' : 'bad' ?>">
+      <?= $deduped === 0 ? 'No duplicates deleted.' : 'Deleted ' . $deduped . ' duplicate' . ($deduped === 1 ? '' : 's') . '.' ?>
+      <?php if ($dedupeSkipped > 0): ?>
+        <?= $dedupeSkipped ?> skipped because <?= $dedupeSkipped === 1 ? 'it is' : 'they are' ?> being converted or <?= $dedupeSkipped === 1 ? 'has' : 'have' ?> a trimmed copy waiting.
+      <?php endif; ?>
+    </p>
   <?php endif; ?>
 
   <?php if ($trimError !== ''): ?>
@@ -145,6 +157,16 @@ $navActive = '';
       <div class="stats-figure"><?= htmlspecialchars(VideoStats::formatBytes($totalBytes), ENT_QUOTES) ?></div>
       <div class="hint">on disk, previews and metadata included</div>
     </div>
+    <?php if ($duplicateCount > 0): ?>
+      <div>
+        <div class="stats-figure"><?= $duplicateCount ?></div>
+        <div class="hint">duplicate<?= $duplicateCount === 1 ? '' : 's' ?> by title</div>
+        <form action="video_dedupe.php" method="post" style="margin-top:.5rem;"
+              onsubmit="return confirm(<?= htmlspecialchars(json_encode('Delete ' . $duplicateCount . ' duplicate video' . ($duplicateCount === 1 ? '' : 's') . "?\n\nVideos with the same title (ignoring case and spacing) are treated as duplicates. The earliest upload of each is kept; the rest are deleted for good."), ENT_QUOTES) ?>);">
+          <button type="submit" class="btn small danger">Delete duplicates</button>
+        </form>
+      </div>
+    <?php endif; ?>
   </div>
 
   <?php if ($rows === []): ?>
