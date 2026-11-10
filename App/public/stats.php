@@ -160,9 +160,9 @@ $navActive = '';
     <?php if ($duplicateCount > 0): ?>
       <div>
         <div class="stats-figure"><?= $duplicateCount ?></div>
-        <div class="hint">duplicate<?= $duplicateCount === 1 ? '' : 's' ?> by title</div>
+        <div class="hint">duplicate<?= $duplicateCount === 1 ? '' : 's' ?> by title, pictures included</div>
         <form action="video_dedupe.php" method="post" style="margin-top:.5rem;"
-              onsubmit="return confirm(<?= htmlspecialchars(json_encode('Delete ' . $duplicateCount . ' duplicate video' . ($duplicateCount === 1 ? '' : 's') . "?\n\nVideos with the same title (ignoring case and spacing) are treated as duplicates. The earliest upload of each is kept; the rest are deleted for good."), ENT_QUOTES) ?>);">
+              onsubmit="return confirm(<?= htmlspecialchars(json_encode('Delete ' . $duplicateCount . ' duplicate' . ($duplicateCount === 1 ? '' : 's') . "?\n\nVideos or pictures with the same title (ignoring case and spacing) are treated as duplicates; a picture only ever matches another picture. The earliest upload of each is kept; the rest are deleted for good."), ENT_QUOTES) ?>);">
           <button type="submit" class="btn small danger">Delete duplicates</button>
         </form>
       </div>

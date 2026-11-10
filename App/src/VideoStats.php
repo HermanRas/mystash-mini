@@ -129,7 +129,9 @@ final class VideoStats
      * Titles match case-insensitively with surrounding and repeated whitespace
      * ignored, so "My Clip" and "my  clip " are the same. In each group the
      * earliest upload is kept (index order breaks ties and covers entries with
-     * no uploaded_at). Pictures are never counted — the stats page is videos.
+     * no uploaded_at). Pictures are included — on Mini most duplicates are
+     * pictures — but grouped apart from videos, so a picture is never taken
+     * for a copy of a video that shares its title.
      *
      * @param list<array<string,mixed>> $videos the index's videos
      * @return list<string> ids of the copies to delete
@@ -139,13 +141,9 @@ final class VideoStats
         $groups = [];
 
         foreach (array_values($videos) as $position => $video) {
-            if (($video['kind'] ?? 'video') === 'picture') {
-                continue;
-            }
+            $key = ($video['kind'] ?? 'video') . "\0" . mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', (string) ($video['title'] ?? ''))));
 
-            $key = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', (string) ($video['title'] ?? ''))));
-
-            if ($key === '') {
+            if (trim((string) ($video['title'] ?? '')) === '') {
                 continue;
             }
 

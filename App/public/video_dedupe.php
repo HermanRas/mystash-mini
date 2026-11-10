@@ -18,7 +18,7 @@ use MyStash\VideoStats;
 use MyStash\VideoTrim;
 
 /**
- * Stats' "Delete duplicates": removes every video whose title repeats an
+ * Stats' "Delete duplicates": removes every video or picture whose title repeats an
  * earlier upload's, keeping the earliest of each group (VideoStats::duplicateIds).
  *
  * The ids are worked out here from the index, never taken from the form, so
