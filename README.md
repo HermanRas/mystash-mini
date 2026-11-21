@@ -1,4 +1,4 @@
-# MyStash Mini v2.0.0
+# MyStash Mini v2.0.1
 
 A variation of [MyStash](../MyStash) — same encrypted, self-hosted stash, cut
 down to one flat library of videos **and pictures**:

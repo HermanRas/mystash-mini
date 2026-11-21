@@ -1,4 +1,15 @@
+# ffmpeg comes from a static upstream build, not from Debian. Debian's trixie
+# package (7.1.x, nine libav* packages plus their X11/tiff/sndfile tree) was
+# ~216 of the 432 HIGH findings in the lab's Trivy scan, none with a Debian fix.
+# Upstream releases carry those fixes. The trade: Trivy cannot see a static
+# binary's version, so this tag is what has to be kept current — Dependabot
+# watches it (.github/dependabot.yml). libx264, libx265 and aac are all the app
+# asks for (VideoEncoder.php) and all are in this build.
+FROM mwader/static-ffmpeg:9.0.2-1 AS ffmpeg
+
 FROM php:8.3.36-fpm
+
+COPY --from=ffmpeg /ffmpeg /ffprobe /usr/local/bin/
 
 # nginx lives in this image too. It is a second process rather than a second
 # container because the two are not independently useful: nginx here serves
@@ -10,11 +21,22 @@ FROM php:8.3.36-fpm
 # p7zip-full is v1 baggage. Since v2.0.0 every archive is libsodium (PHP's
 # built-in sodium extension, no package needed); 7z is kept only so a v1 stash
 # can be read once and upgraded (App/src/MigrateV2.php, Docs/v2_migration.md).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
+#
+# `upgrade` because the base image is only as fresh as the day it was tagged:
+# the lab scan found nginx a Debian security release behind (12 CRITICAL) with
+# the fix already published. CI rebuilds this layer weekly without cache
+# (.github/workflows/image.yml) so those land without anyone editing this file.
+#
+# The purge drops the compiler toolchain the php image keeps for
+# docker-php-ext-install, which this image never runs. linux-libc-dev alone was
+# 70 findings — kernel CVEs, in headers, in a container that has no kernel.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
         p7zip-full \
         procps \
         nginx-light \
+    && apt-get purge -y --auto-remove $PHPIZE_DEPS \
+        libc6-dev libcrypt-dev linux-libc-dev rpcsvc-proto \
     && rm -rf /var/lib/apt/lists/*
 
 # The Debian package ships a site on port 80 serving its own welcome page.

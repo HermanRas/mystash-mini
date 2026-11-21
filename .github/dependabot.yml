@@ -1,0 +1,12 @@
+# Keeps the two FROM lines in App/Dockerfile current. The static ffmpeg build
+# matters most: Trivy cannot see inside it, so a stale tag would go unnoticed.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /App
+    schedule:
+      interval: weekly
+    ignore:
+      # Patch releases of PHP 8.3 only; moving to 8.4+ is a deliberate change.
+      - dependency-name: php
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
