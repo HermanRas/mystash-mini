@@ -5,7 +5,7 @@
 # binary's version, so this tag is what has to be kept current — Dependabot
 # watches it (.github/dependabot.yml). libx264, libx265 and aac are all the app
 # asks for (VideoEncoder.php) and all are in this build.
-FROM mwader/static-ffmpeg:9.0.2-1 AS ffmpeg
+FROM mwader/static-ffmpeg:9.1 AS ffmpeg
 
 FROM php:8.3.36-fpm
 
